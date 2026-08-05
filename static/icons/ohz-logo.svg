@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title description">
   <title id="title">OpenHoverZoom OHZ logo</title>
-  <desc id="description">A geometric OHZ monogram on a rounded dark square.</desc>
-  <rect width="128" height="128" rx="26" fill="#111827"/>
+  <desc id="description">A geometric OHZ monogram on a full-bleed dark square.</desc>
+  <rect width="128" height="128" fill="#111827"/>
   <circle cx="25" cy="64" r="17" fill="none" stroke="#45D6C4" stroke-width="10"/>
   <path
     d="M53 43V85 M72 43V85 M53 66L72 62"

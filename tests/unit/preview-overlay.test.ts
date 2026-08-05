@@ -24,7 +24,10 @@ describe("preview overlay", () => {
     expect(panel.hidden).toBe(false);
     expect(panel.classList.contains("loading")).toBe(true);
     expect(panel.querySelector(".spinner")).not.toBeNull();
-    expect(panel.textContent).toContain("Resolving preview");
+    expect(panel.querySelector(".loader")?.getAttribute("aria-label")).toBe(
+      "Resolving preview",
+    );
+    expect(panel.textContent).toBe("");
   });
 
   it("keeps the host pointer-transparent and does not chase pointer movement", () => {
@@ -68,7 +71,11 @@ describe("preview overlay", () => {
 
   it("shows a subtle metadata strip and navigates an ordered gallery", async () => {
     const first = imageCandidate("first", "First caption");
-    const second = imageCandidate("second", "Second caption");
+    const second = {
+      ...imageCandidate("second", "Second caption"),
+      linkedPageUrl: "https://gallery.example/photos/second",
+    };
+    const secondOriginal = imageCandidate("second-original", "Second caption");
     const overlay = new PreviewOverlay(85);
     overlay.updatePointer(300, 220);
     overlay.show({ ...first, gallery: [first, second], galleryIndex: 0 });
@@ -81,8 +88,10 @@ describe("preview overlay", () => {
     panel = previewPanel();
     expect(panel.querySelector(".metadata")?.textContent).toContain("First caption");
     expect(panel.querySelector(".gallery-status")?.textContent).toContain("1 / 2");
+    expect(panel.querySelector(".download-hint")?.textContent).toBe("Enter ⤓");
 
-    expect(overlay.navigateGallery(1)).toBe(true);
+    const selection = overlay.navigateGallery(1);
+    expect(selection).toMatchObject({ index: 1, candidate: second });
     panel = previewPanel();
     expect(panel.querySelector(".metadata")?.textContent).toContain("First caption");
     panel.querySelector(".preload-bin img")?.dispatchEvent(new Event("load"));
@@ -94,10 +103,50 @@ describe("preview overlay", () => {
     expect(panel.querySelector(".metadata")?.textContent).toContain("Second caption");
     expect(panel.querySelector(".gallery-status")?.textContent).toContain("2 / 2");
 
-    expect(overlay.navigateGallery(1)).toBe(true);
+    if (!selection) throw new Error("Expected a gallery selection");
+    expect(overlay.upgradeGalleryItem(selection, secondOriginal)).toBe(true);
+    expect(previewPanel().querySelector(".media-frame img")?.getAttribute("src")).toBe(
+      "https://cdn.example/second.jpg",
+    );
+    previewPanel().querySelector(".preload-bin img")?.dispatchEvent(new Event("load"));
+    await Promise.resolve();
+    expect(previewPanel().querySelector(".media-frame img")?.getAttribute("src")).toBe(
+      "https://cdn.example/second-original.jpg",
+    );
+
+    expect(overlay.navigateGallery(1)).toMatchObject({ index: 0, candidate: first });
     previewPanel().querySelector(".preload-bin img")?.dispatchEvent(new Event("load"));
     await Promise.resolve();
     expect(previewPanel().querySelector(".gallery-status")?.textContent).toContain("1 / 2");
+  });
+
+  it("exposes the committed image URL and updates its shortcut hint", async () => {
+    const overlay = new PreviewOverlay(85, "Enter");
+    overlay.show(imageCandidate("downloadable", "Downloadable image"));
+    const image = previewPanel().querySelector<HTMLImageElement>(".preload-bin img");
+    image?.dispatchEvent(new Event("load"));
+    await Promise.resolve();
+
+    expect(overlay.getVisibleImageUrl()).toBe(
+      "https://cdn.example/downloadable.jpg",
+    );
+    overlay.updateSettings(85, "Shift+D");
+    expect(previewPanel().querySelector(".download-hint")?.textContent).toBe(
+      "Shift+D ⤓",
+    );
+    overlay.hide();
+    expect(overlay.getVisibleImageUrl()).toBeNull();
+  });
+
+  it("removes a leading File prefix from the displayed caption", async () => {
+    const overlay = new PreviewOverlay(85);
+    overlay.show(imageCandidate("wikimedia", "File: Mountain landscape.jpg"));
+    previewPanel().querySelector(".preload-bin img")?.dispatchEvent(new Event("load"));
+    await Promise.resolve();
+
+    expect(previewPanel().querySelector(".caption")?.textContent).toBe(
+      "Mountain landscape.jpg",
+    );
   });
 
   it("sizes the committed panel from the media instead of a long caption", async () => {
@@ -117,6 +166,25 @@ describe("preview overlay", () => {
 
     expect(previewPanel().style.width).toBe("222px");
     expect(previewPanel().querySelector(".caption")?.textContent).toBe(candidate.caption);
+  });
+
+  it("refits the panel when viewport constraints resize the media", async () => {
+    const overlay = new PreviewOverlay(85);
+    overlay.updatePointer(300, 220);
+    overlay.show(imageCandidate("responsive", "Responsive image"));
+
+    const image = previewPanel().querySelector<HTMLImageElement>(".preload-bin img");
+    if (!image) throw new Error("Expected a preloaded image");
+    const mediaRectangle = vi
+      .spyOn(image, "getBoundingClientRect")
+      .mockReturnValue(rectangle(0, 0, 320, 180));
+    image.dispatchEvent(new Event("load"));
+    await Promise.resolve();
+    expect(previewPanel().style.width).toBe("322px");
+
+    mediaRectangle.mockReturnValue(rectangle(0, 0, 210, 118));
+    overlay.reposition();
+    expect(previewPanel().style.width).toBe("212px");
   });
 });
 

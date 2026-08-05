@@ -19,6 +19,7 @@ export function discoverDomGallery(
   primaryImage: HTMLImageElement,
   baseUrl: string,
   lazyAttributes: readonly string[],
+  linkedPageForImage?: (image: HTMLImageElement) => string | null,
 ): DiscoveredGallery | null {
   let root = primaryImage.parentElement;
 
@@ -31,7 +32,13 @@ export function discoverDomGallery(
     if (images.includes(primaryImage) && images.length >= 2) {
       const grouped = selectGalleryImages(root, primaryImage, images);
       const gallery = grouped
-        ? createGallery(grouped, primaryImage, baseUrl, lazyAttributes)
+        ? createGallery(
+            grouped,
+            primaryImage,
+            baseUrl,
+            lazyAttributes,
+            linkedPageForImage,
+          )
         : null;
       if (gallery) return gallery;
     }
@@ -91,14 +98,19 @@ function createGallery(
   primaryImage: HTMLImageElement,
   baseUrl: string,
   lazyAttributes: readonly string[],
+  linkedPageForImage?: (image: HTMLImageElement) => string | null,
 ): DiscoveredGallery | null {
   const items: MediaCandidate[] = [];
   const indices = new Map<string, number>();
   let activeIndex = -1;
 
   for (const image of images) {
-    const candidate = candidateForImage(image, baseUrl, lazyAttributes);
-    if (!candidate) continue;
+    const localCandidate = candidateForImage(image, baseUrl, lazyAttributes);
+    if (!localCandidate) continue;
+    const linkedPageUrl = linkedPageForImage?.(image) ?? null;
+    const candidate = linkedPageUrl && linkedPageUrl !== localCandidate.url
+      ? { ...localCandidate, linkedPageUrl }
+      : localCandidate;
     const existing = indices.get(candidate.url);
     if (existing !== undefined) {
       if (image === primaryImage) activeIndex = existing;

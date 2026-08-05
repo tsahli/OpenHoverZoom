@@ -7,6 +7,35 @@ const MAX_POINT_STACK = 12;
 const MAX_DESCENDANT_DEPTH = 4;
 const MAX_DESCENDANTS = 32;
 const MAX_MEDIA_LINK_ANCESTORS = 4;
+const MAX_UI_SURFACE_ANCESTORS = 8;
+const MIN_UI_SURFACE_CONTROLS = 3;
+const MIN_ASSOCIATED_SURFACE_AREA_RATIO = 0.25;
+const MAX_ASSOCIATED_SURFACE_AREA_RATIO = 4;
+const MIN_ASSOCIATED_SURFACE_OVERLAP = 0.75;
+const MIN_MEDIA_SURFACE_COVERAGE = 0.6;
+const OPAQUE_LAYER_ALPHA = 0.85;
+const INTERACTIVE_SELECTOR = [
+  "a",
+  "button",
+  "input",
+  "select",
+  "summary",
+  "textarea",
+  "[role='button']",
+  "[role='link']",
+  "[role='menuitem']",
+].join(",");
+const ALWAYS_INERT_SURFACE_SELECTOR = [
+  "dialog",
+  "menu",
+  "[popover]",
+  "[aria-modal='true']",
+  "[role='dialog']",
+  "[role='menu']",
+].join(",");
+const STRUCTURAL_NAVIGATION_SELECTOR = "header,nav,[role='navigation']";
+const UI_SURFACE_SEMANTICS =
+  /(?:^|[-_\s])(dialog|dropdown|flyout|mega[-_\s]?menu|modal|popover)(?:$|[-_\s])/iu;
 const HOVER_SOURCE_ATTRIBUTES = LAZY_SOURCE_ATTRIBUTES.filter(
   (attribute) => attribute !== "data-url",
 );
@@ -22,22 +51,34 @@ export function findHoverTarget(
   pointer?: PointerPosition,
 ): Element | null {
   if (!(eventTarget instanceof Element)) return null;
+  if (isInsideInteractiveUiSurface(eventTarget, pointer)) return null;
 
   const paths = collectHitPaths(eventTarget, pointer);
 
   // Prefer concrete media. Many galleries place a transparent link or
   // control layer above a nested image.
-  for (const element of paths) {
-    if (isMediaElement(element)) return element;
+  const directMedia = paths.find(isMediaElement);
+  if (directMedia) {
+    return pointer && isObscuredByForeground(directMedia, eventTarget, pointer)
+      ? null
+      : directMedia;
   }
 
   for (const element of paths) {
     const media = findBoundedMediaDescendant(element, pointer);
-    if (media) return media;
+    if (media) {
+      return pointer && isObscuredByForeground(media, eventTarget, pointer)
+        ? null
+        : media;
+    }
   }
 
   for (const element of paths) {
-    if (isSourceCandidate(element)) return element;
+    if (isSourceCandidate(element)) {
+      return pointer && isObscuredByForeground(element, eventTarget, pointer)
+        ? null
+        : element;
+    }
   }
 
   for (const element of paths) {
@@ -47,6 +88,180 @@ export function findHoverTarget(
   }
 
   return null;
+}
+
+function isInsideInteractiveUiSurface(
+  eventTarget: Element,
+  pointer?: PointerPosition,
+): boolean {
+  let current: Element | null = eventTarget;
+  for (
+    let depth = 0;
+    current && depth < MAX_UI_SURFACE_ANCESTORS;
+    depth += 1, current = current.parentElement
+  ) {
+    if (current.matches(ALWAYS_INERT_SURFACE_SELECTOR)) return true;
+    const semantics = [
+      current.id,
+      current.className,
+      current.getAttribute("role") ?? "",
+      current.getAttribute("aria-label") ?? "",
+    ].join(" ");
+    if (UI_SURFACE_SEMANTICS.test(semantics)) return true;
+    // A persistent header or navigation bar is page structure, not a transient
+    // interaction surface. A nested flyout is caught before we reach this point.
+    if (current.matches(STRUCTURAL_NAVIGATION_SELECTOR)) break;
+
+    if (
+      current !== eventTarget &&
+      isPositionedOpaqueSurface(current) &&
+      current.querySelectorAll(INTERACTIVE_SELECTOR).length >= MIN_UI_SURFACE_CONTROLS &&
+      !isMediaDominatedSurface(current, pointer)
+    ) {
+      return true;
+    }
+    if (
+      current instanceof HTMLBodyElement ||
+      current instanceof HTMLHtmlElement
+    ) {
+      break;
+    }
+  }
+  return false;
+}
+
+function isPositionedOpaqueSurface(element: Element): boolean {
+  const style = element.ownerDocument.defaultView?.getComputedStyle(element);
+  if (!style || !["absolute", "fixed", "sticky"].includes(style.position)) return false;
+  return backgroundAlpha(style.backgroundColor) >= OPAQUE_LAYER_ALPHA;
+}
+
+function isMediaDominatedSurface(
+  surface: Element,
+  pointer?: PointerPosition,
+): boolean {
+  if (!pointer) return false;
+  const media = findBoundedMediaDescendant(surface, pointer);
+  if (!media) return false;
+
+  const surfaceRect = surface.getBoundingClientRect();
+  const mediaRect = media.getBoundingClientRect();
+  const surfaceArea = surfaceRect.width * surfaceRect.height;
+  if (surfaceArea <= 0) return false;
+
+  const intersectionWidth = Math.max(
+    0,
+    Math.min(surfaceRect.right, mediaRect.right) -
+      Math.max(surfaceRect.left, mediaRect.left),
+  );
+  const intersectionHeight = Math.max(
+    0,
+    Math.min(surfaceRect.bottom, mediaRect.bottom) -
+      Math.max(surfaceRect.top, mediaRect.top),
+  );
+  return (
+    intersectionWidth * intersectionHeight / surfaceArea >=
+    MIN_MEDIA_SURFACE_COVERAGE
+  );
+}
+
+function isObscuredByForeground(
+  candidate: Element,
+  eventTarget: Element,
+  pointer: PointerPosition,
+): boolean {
+  const interactive = eventTarget.closest(INTERACTIVE_SELECTOR);
+  if (interactive && !isAssociatedSurface(interactive, candidate)) return true;
+
+  const elementsFromPoint = eventTarget.ownerDocument.elementsFromPoint?.bind(
+    eventTarget.ownerDocument,
+  );
+  if (!elementsFromPoint) return false;
+  const stack = elementsFromPoint(pointer.x, pointer.y).slice(0, MAX_POINT_STACK);
+  const candidateIndex = stack.findIndex(
+    (element) => element === candidate || element.contains(candidate),
+  );
+  const foreground = candidateIndex >= 0 ? stack.slice(0, candidateIndex) : stack;
+
+  return foreground.some((element) => {
+    if (
+      element === candidate ||
+      element.contains(candidate) ||
+      candidate.contains(element) ||
+      element instanceof HTMLBodyElement ||
+      element instanceof HTMLHtmlElement
+    ) {
+      return false;
+    }
+    const foregroundInteractive = element.closest(INTERACTIVE_SELECTOR);
+    if (
+      foregroundInteractive &&
+      !isAssociatedSurface(foregroundInteractive, candidate)
+    ) {
+      return true;
+    }
+    if (isAssociatedSurface(element, candidate)) return false;
+    return isBlockingSurface(element);
+  });
+}
+
+function isAssociatedSurface(foreground: Element, candidate: Element): boolean {
+  if (
+    foreground === candidate ||
+    foreground.contains(candidate) ||
+    candidate.contains(foreground)
+  ) {
+    return true;
+  }
+
+  const foregroundRect = foreground.getBoundingClientRect();
+  const candidateRect = candidate.getBoundingClientRect();
+  const foregroundArea = foregroundRect.width * foregroundRect.height;
+  const candidateArea = candidateRect.width * candidateRect.height;
+  if (foregroundArea <= 0 || candidateArea <= 0) return false;
+
+  const areaRatio = foregroundArea / candidateArea;
+  if (
+    areaRatio < MIN_ASSOCIATED_SURFACE_AREA_RATIO ||
+    areaRatio > MAX_ASSOCIATED_SURFACE_AREA_RATIO
+  ) {
+    return false;
+  }
+
+  const intersectionWidth = Math.max(
+    0,
+    Math.min(foregroundRect.right, candidateRect.right) -
+      Math.max(foregroundRect.left, candidateRect.left),
+  );
+  const intersectionHeight = Math.max(
+    0,
+    Math.min(foregroundRect.bottom, candidateRect.bottom) -
+      Math.max(foregroundRect.top, candidateRect.top),
+  );
+  const intersectionArea = intersectionWidth * intersectionHeight;
+  return (
+    intersectionArea / Math.min(foregroundArea, candidateArea) >=
+    MIN_ASSOCIATED_SURFACE_OVERLAP
+  );
+}
+
+function isBlockingSurface(element: Element): boolean {
+  if (element.matches(ALWAYS_INERT_SURFACE_SELECTOR)) return true;
+  const backgroundColor = element.ownerDocument.defaultView
+    ?.getComputedStyle(element)
+    .backgroundColor;
+  return backgroundAlpha(backgroundColor) >= OPAQUE_LAYER_ALPHA;
+}
+
+function backgroundAlpha(value: string | undefined): number {
+  const normalized = value?.trim().toLowerCase() ?? "";
+  if (!normalized || normalized === "transparent") return 0;
+  const match = normalized.match(/^rgba?\((.*)\)$/u);
+  if (!match) return 0;
+  const components = match[1]?.split(",").map((component) => component.trim()) ?? [];
+  if (normalized.startsWith("rgb(")) return 1;
+  const alpha = Number.parseFloat(components[3] ?? "0");
+  return Number.isFinite(alpha) ? alpha : 0;
 }
 
 function collectHitPaths(eventTarget: Element, pointer?: PointerPosition): Element[] {

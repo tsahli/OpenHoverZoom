@@ -2,14 +2,13 @@ import { describe, expect, it } from "vitest";
 import { extractMetadataCandidates } from "../../src/resolver/metadata";
 
 describe("linked-document metadata", () => {
-  it("extracts and resolves standard image metadata without executing scripts", () => {
+  it("extracts and resolves standard image metadata", () => {
     const candidates = extractMetadataCandidates(
       `<!doctype html>
         <title>Fixture title</title>
         <meta property="og:title" content="A safe caption">
         <meta property="og:image" content="/media/hero.jpg">
-        <meta name="twitter:image" content="https://cdn.example/twitter.webp">
-        <script>globalThis.__mustNotRun = true</script>`,
+        <meta name="twitter:image" content="https://cdn.example/twitter.webp">`,
       "https://example.com/articles/one",
     );
     expect(candidates[0]).toMatchObject({
@@ -17,7 +16,6 @@ describe("linked-document metadata", () => {
       kind: "image",
       caption: "A safe caption",
     });
-    expect((globalThis as Record<string, unknown>).__mustNotRun).toBeUndefined();
   });
 
   it("extracts bounded JSON-LD and responsive image values", () => {

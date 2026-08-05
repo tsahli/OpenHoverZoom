@@ -9,7 +9,12 @@ export interface CancelFetchRequest {
   requestId: string;
 }
 
-export type BackgroundRequest = FetchDocumentRequest | CancelFetchRequest;
+export interface DownloadMediaRequest {
+  type: "download-media";
+  url: string;
+}
+
+export type BackgroundRequest = FetchDocumentRequest | CancelFetchRequest | DownloadMediaRequest;
 
 export interface FetchDocumentSuccess {
   success: true;
@@ -41,7 +46,11 @@ export type FetchDocumentResponse = FetchDocumentSuccess | FetchDocumentFailure;
 const REQUEST_ID = /^[a-z0-9_-]{8,80}$/iu;
 
 export function isBackgroundRequest(value: unknown): value is BackgroundRequest {
-  if (!isRecord(value) || !validRequestId(value.requestId)) return false;
+  if (!isRecord(value)) return false;
+  if (value.type === "download-media") {
+    return typeof value.url === "string" && value.url.length > 0 && value.url.length <= 8192;
+  }
+  if (!validRequestId(value.requestId)) return false;
   if (value.type === "cancel-fetch") return true;
   return (
     value.type === "fetch-document" &&

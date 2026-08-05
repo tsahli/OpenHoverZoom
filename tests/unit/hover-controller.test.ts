@@ -2,12 +2,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MediaCandidate } from "../../src/resolver/candidate";
 import { DEFAULT_SETTINGS } from "../../src/shared/settings";
 
-const mocks = vi.hoisted(() => ({ resolveTarget: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  requestImageDownload: vi.fn(),
+  resolveGalleryCandidate: vi.fn(),
+  resolveTarget: vi.fn(),
+}));
 
-vi.mock("../../src/resolver", () => ({ resolveTarget: mocks.resolveTarget }));
+vi.mock("../../src/resolver", () => ({
+  resolveGalleryCandidate: mocks.resolveGalleryCandidate,
+  resolveTarget: mocks.resolveTarget,
+}));
+vi.mock("../../src/content/download-client", () => ({
+  requestImageDownload: mocks.requestImageDownload,
+}));
 
 import { HoverController } from "../../src/content/hover-controller";
-import type { PreviewOverlay } from "../../src/content/preview-overlay";
+import type {
+  GallerySelection,
+  PreviewOverlay,
+} from "../../src/content/preview-overlay";
 
 describe("hover tracking", () => {
   let overlay: OverlayDouble;
@@ -17,6 +30,10 @@ describe("hover tracking", () => {
     vi.useFakeTimers();
     document.body.replaceChildren();
     mocks.resolveTarget.mockReset();
+    mocks.resolveGalleryCandidate.mockReset();
+    mocks.resolveGalleryCandidate.mockResolvedValue(null);
+    mocks.requestImageDownload.mockReset();
+    mocks.requestImageDownload.mockResolvedValue(undefined);
     mocks.resolveTarget.mockImplementation(async (target: Element) => candidateFor(target));
     overlay = new OverlayDouble();
     controller = new HoverController(
@@ -93,6 +110,64 @@ describe("hover tracking", () => {
     expect(overlay.hide).toHaveBeenCalledOnce();
   });
 
+  it("removes a delayed loader for a non-null non-media transition", async () => {
+    const image = imageWithId("first");
+    const surface = document.createElement("div");
+    document.body.append(surface);
+    Object.defineProperty(document, "elementsFromPoint", {
+      configurable: true,
+      value: vi.fn(() => [surface]),
+    });
+
+    dispatchPointer(image, "pointerover", 100, 100);
+    await vi.advanceTimersByTimeAsync(120);
+    expect(overlay.showLoading).toHaveBeenCalledOnce();
+    expect(overlay.visible).toBe(true);
+
+    dispatchDocumentPointerOut(surface, 200, 100);
+
+    expect(overlay.hide).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(130);
+    expect(mocks.resolveTarget).not.toHaveBeenCalled();
+  });
+
+  it("aborts an in-flight loader for a non-null non-media transition", async () => {
+    const image = imageWithId("first");
+    const surface = document.createElement("div");
+    document.body.append(surface);
+    Object.defineProperty(document, "elementsFromPoint", {
+      configurable: true,
+      value: vi.fn(() => [surface]),
+    });
+    let resolutionSignal: AbortSignal | undefined;
+    mocks.resolveTarget.mockImplementation((_target, _options, signal: AbortSignal) => {
+      resolutionSignal = signal;
+      return new Promise<MediaCandidate | null>(() => undefined);
+    });
+
+    dispatchPointer(image, "pointerover", 100, 100);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(resolutionSignal?.aborted).toBe(false);
+
+    dispatchDocumentPointerOut(surface, 200, 100);
+
+    expect(resolutionSignal?.aborted).toBe(true);
+    expect(overlay.hide).toHaveBeenCalledOnce();
+  });
+
+  it("clears a loader when the page loses focus", async () => {
+    const image = imageWithId("first");
+    dispatchPointer(image, "pointerover", 100, 100);
+    await vi.advanceTimersByTimeAsync(120);
+    expect(overlay.showLoading).toHaveBeenCalledOnce();
+
+    window.dispatchEvent(new Event("blur"));
+
+    expect(overlay.hide).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(130);
+    expect(mocks.resolveTarget).not.toHaveBeenCalled();
+  });
+
   it("cancels an in-flight transition when the pointer changes targets again", async () => {
     const first = imageWithId("first");
     const second = imageWithId("second");
@@ -146,6 +221,100 @@ describe("hover tracking", () => {
       expect.objectContaining({ caption: "linked" }),
     );
   });
+
+  it("replaces a local preview when a better deferred candidate is ready", async () => {
+    const image = imageWithId("first");
+    let finishUpgrade: ((candidate: MediaCandidate) => void) | undefined;
+    mocks.resolveTarget.mockImplementation(async (target: Element, _options, _signal, hooks) => {
+      hooks.onUpgrade(
+        new Promise<MediaCandidate>((resolve) => {
+          finishUpgrade = resolve;
+        }),
+      );
+      return candidateFor(target);
+    });
+
+    dispatchPointer(image, "pointerover", 100, 100);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(overlay.show).toHaveBeenCalledOnce();
+    expect(overlay.show).toHaveBeenLastCalledWith(
+      expect.objectContaining({ url: "https://cdn.example/first.jpg" }),
+    );
+
+    finishUpgrade?.({
+      url: "https://cdn.example/first-original.jpg",
+      kind: "image",
+      source: "document-metadata",
+      confidence: 98,
+    });
+    await Promise.resolve();
+
+    expect(overlay.show).toHaveBeenCalledTimes(2);
+    expect(overlay.show).toHaveBeenLastCalledWith(
+      expect.objectContaining({ url: "https://cdn.example/first-original.jpg" }),
+    );
+  });
+
+  it("upgrades a newly selected gallery item from its linked page", async () => {
+    const thumbnail: MediaCandidate = {
+      url: "https://cdn.example/second-small.jpg",
+      kind: "image",
+      source: "srcset",
+      confidence: 90,
+      linkedPageUrl: "https://gallery.example/photos/second",
+    };
+    const original: MediaCandidate = {
+      url: "https://cdn.example/second-original.jpg",
+      kind: "image",
+      source: "document-metadata",
+      confidence: 98,
+    };
+    const selection = { index: 1, candidate: thumbnail };
+    overlay.visible = true;
+    overlay.mediaVisible = true;
+    overlay.navigateGallery.mockReturnValueOnce(selection);
+    mocks.resolveGalleryCandidate.mockResolvedValueOnce(original);
+
+    const event = dispatchKey("ArrowRight");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(mocks.resolveGalleryCandidate).toHaveBeenCalledWith(
+      thumbnail,
+      expect.any(AbortSignal),
+    );
+    expect(overlay.upgradeGalleryItem).toHaveBeenCalledWith(selection, original);
+  });
+
+  it("downloads the exact visible image only for the configured shortcut", async () => {
+    controller.updateSettings({
+      ...DEFAULT_SETTINGS,
+      hoverDelayMs: 250,
+      downloadShortcut: "Shift+D",
+    });
+
+    const inactiveEvent = dispatchKey("d", { shiftKey: true });
+    expect(inactiveEvent.defaultPrevented).toBe(false);
+    expect(mocks.requestImageDownload).not.toHaveBeenCalled();
+
+    const image = imageWithId("first");
+    dispatchPointer(image, "pointerover", 100, 100);
+    await vi.advanceTimersByTimeAsync(250);
+
+    const unrelatedEvent = dispatchKey("Enter");
+    expect(unrelatedEvent.defaultPrevented).toBe(false);
+    expect(mocks.requestImageDownload).not.toHaveBeenCalled();
+
+    const event = dispatchKey("d", { shiftKey: true });
+    await Promise.resolve();
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(mocks.requestImageDownload).toHaveBeenCalledOnce();
+    expect(mocks.requestImageDownload).toHaveBeenCalledWith(
+      "https://cdn.example/first.jpg",
+    );
+  });
 });
 
 class OverlayDouble {
@@ -169,7 +338,13 @@ class OverlayDouble {
   });
   isVisible = vi.fn(() => this.visible);
   hasVisibleMedia = vi.fn(() => this.mediaVisible);
-  navigateGallery = vi.fn(() => false);
+  navigateGallery = vi.fn<(_delta: -1 | 1) => GallerySelection | null>(() => null);
+  upgradeGalleryItem = vi.fn<
+    (_selection: GallerySelection, _candidate: MediaCandidate) => boolean
+  >(() => false);
+  getVisibleImageUrl = vi.fn(() =>
+    this.mediaVisible ? "https://cdn.example/first.jpg" : null,
+  );
 }
 
 function imageWithId(id: string): HTMLImageElement {
@@ -191,9 +366,33 @@ function candidateFor(target: Element): MediaCandidate {
 
 function dispatchPointer(
   target: Element,
-  type: "pointerover" | "pointermove",
+  type: "pointerover" | "pointerout" | "pointermove",
+  clientX: number,
+  clientY: number,
+  relatedTarget: EventTarget | null = null,
+): void {
+  target.dispatchEvent(
+    new MouseEvent(type, { bubbles: true, clientX, clientY, relatedTarget }),
+  );
+}
+
+function dispatchDocumentPointerOut(
+  relatedTarget: EventTarget,
   clientX: number,
   clientY: number,
 ): void {
-  target.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX, clientY }));
+  document.dispatchEvent(
+    new MouseEvent("pointerout", { bubbles: true, clientX, clientY, relatedTarget }),
+  );
+}
+
+function dispatchKey(key: string, init: KeyboardEventInit = {}): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    bubbles: true,
+    cancelable: true,
+    key,
+    ...init,
+  });
+  document.dispatchEvent(event);
+  return event;
 }

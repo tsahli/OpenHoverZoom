@@ -91,6 +91,46 @@ describe("DOM resolver", () => {
     );
   });
 
+  it("discovers a detail page from a covering sibling link", () => {
+    const tile = document.createElement("div");
+    const image = document.createElement("img");
+    image.src = "https://cdn.example.test/thumbnail.jpg";
+    const interactionLayer = document.createElement("div");
+    const overlay = document.createElement("a");
+    overlay.href = "https://gallery.example.test/photos/123";
+    interactionLayer.append(overlay);
+    tile.append(image, interactionLayer);
+    document.body.append(tile);
+    image.getBoundingClientRect = () => rectangle(20, 30, 300, 200);
+    overlay.getBoundingClientRect = () => rectangle(20, 30, 300, 200);
+
+    const resolution = resolveDomTarget(image, { showSameSizeImages: true });
+
+    expect(resolution.anchorUrl).toBe("https://gallery.example.test/photos/123");
+    expect(resolution.candidates).toContainEqual(
+      expect.objectContaining({
+        url: "https://cdn.example.test/thumbnail.jpg",
+        source: "image-src",
+      }),
+    );
+  });
+
+  it("ignores a sibling link that does not cover the image", () => {
+    const tile = document.createElement("div");
+    const image = document.createElement("img");
+    image.src = "https://cdn.example.test/thumbnail.jpg";
+    const unrelated = document.createElement("a");
+    unrelated.href = "https://gallery.example.test/unrelated";
+    tile.append(image, unrelated);
+    document.body.append(tile);
+    image.getBoundingClientRect = () => rectangle(20, 30, 300, 200);
+    unrelated.getBoundingClientRect = () => rectangle(400, 30, 120, 30);
+
+    const resolution = resolveDomTarget(image, { showSameSizeImages: true });
+
+    expect(resolution.anchorUrl).toBeNull();
+  });
+
   it("discovers an ordered, bounded gallery around the hovered image", () => {
     const gallery = document.createElement("section");
     gallery.className = "photo-gallery";
@@ -100,8 +140,12 @@ describe("DOM resolver", () => {
       const image = document.createElement("img");
       image.alt = `Gallery ${name}`;
       image.srcset = `/${name}-thumb.jpg 300w, /${name}-large.jpg 1600w`;
-      figure.append(image);
+      const detailLink = document.createElement("a");
+      detailLink.href = `/photos/${name}`;
+      figure.append(image, detailLink);
       gallery.append(figure);
+      image.getBoundingClientRect = () => rectangle(20, 30, 300, 200);
+      detailLink.getBoundingClientRect = () => rectangle(20, 30, 300, 200);
       return image;
     });
     document.body.append(gallery);
@@ -113,6 +157,11 @@ describe("DOM resolver", () => {
       "http://localhost:3000/one-large.jpg",
       "http://localhost:3000/two-large.jpg",
       "http://localhost:3000/three-large.jpg",
+    ]);
+    expect(resolution.gallery?.items.map((item) => item.linkedPageUrl)).toEqual([
+      "http://localhost:3000/photos/one",
+      "http://localhost:3000/photos/two",
+      "http://localhost:3000/photos/three",
     ]);
   });
 
@@ -138,3 +187,17 @@ describe("DOM resolver", () => {
     expect(resolution.gallery?.index).toBe(30);
   });
 });
+
+function rectangle(left: number, top: number, width: number, height: number): DOMRect {
+  return {
+    x: left,
+    y: top,
+    left,
+    top,
+    width,
+    height,
+    right: left + width,
+    bottom: top + height,
+    toJSON: () => ({}),
+  };
+}

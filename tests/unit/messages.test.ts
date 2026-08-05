@@ -2,12 +2,18 @@ import { describe, expect, it } from "vitest";
 import { isBackgroundRequest, isFetchDocumentResponse } from "../../src/shared/messages";
 
 describe("runtime message validation", () => {
-  it("accepts a well-formed fetch request", () => {
+  it("accepts well-formed fetch and download requests", () => {
     expect(
       isBackgroundRequest({
         type: "fetch-document",
         requestId: "request_123",
         url: "https://example.com/article",
+      }),
+    ).toBe(true);
+    expect(
+      isBackgroundRequest({
+        type: "download-media",
+        url: "https://cdn.example/image.jpg",
       }),
     ).toBe(true);
   });
@@ -19,6 +25,7 @@ describe("runtime message validation", () => {
     expect(
       isBackgroundRequest({ type: "fetch-document", requestId: "request_123", url: 42 }),
     ).toBe(false);
+    expect(isBackgroundRequest({ type: "download-media", url: 42 })).toBe(false);
   });
 
   it("validates success and failure responses", () => {

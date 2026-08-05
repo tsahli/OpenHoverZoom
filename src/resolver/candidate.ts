@@ -19,6 +19,8 @@ export interface MediaCandidate {
   kind: MediaKind;
   source: CandidateSource;
   confidence: number;
+  /** Detail page that may expose a better version of this gallery item. */
+  linkedPageUrl?: string;
   width?: number;
   height?: number;
   caption?: string;

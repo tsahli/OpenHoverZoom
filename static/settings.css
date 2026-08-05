@@ -57,6 +57,22 @@ input[type="number"] {
   padding: 7px;
 }
 
+.shortcut-control {
+  display: flex;
+  gap: 8px;
+}
+
+.shortcut-control input {
+  box-sizing: border-box;
+  flex: 1;
+  min-width: 0;
+  padding: 7px;
+}
+
+small {
+  color: GrayText;
+}
+
 button {
   padding: 8px 12px;
 }

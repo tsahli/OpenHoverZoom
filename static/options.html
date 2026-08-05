@@ -22,6 +22,22 @@
           <span>Preview same-size images</span>
           <input id="same-size" type="checkbox" />
         </label>
+        <label>
+          Download shortcut
+          <span class="shortcut-control">
+            <input
+              id="download-shortcut"
+              type="text"
+              readonly
+              aria-describedby="download-shortcut-help"
+            />
+            <button id="reset-download-shortcut" type="button">Use Enter</button>
+          </span>
+          <small id="download-shortcut-help">
+            Click the field, then press Enter, Space, a letter, or a number.
+            Modifier keys are optional.
+          </small>
+        </label>
         <button type="submit">Save</button>
       </form>
       <section>

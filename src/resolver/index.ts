@@ -9,6 +9,7 @@ export interface ResolverOptions {
 
 export interface ResolverHooks {
   onLocalCandidate?: (candidate: MediaCandidate) => void;
+  onUpgrade?: (candidate: Promise<MediaCandidate | null>) => void;
   metadataBudgetMs?: number;
 }
 
@@ -41,7 +42,53 @@ export async function resolveTarget(
       )
     : await linkedPromise;
   signal.throwIfAborted();
-  if (linked === METADATA_TIMEOUT) return attachGallery(local!, resolution);
+  if (linked === METADATA_TIMEOUT) {
+    const initial = attachGallery(local!, resolution);
+    if (hooks.onUpgrade) {
+      hooks.onUpgrade(
+        linkedPromise.then((lateLinked) => {
+          signal.throwIfAborted();
+          const upgraded = selectBestCandidate(lateLinked, resolution, options);
+          return upgraded && upgraded.url !== initial.url ? upgraded : null;
+        }),
+      );
+    }
+    return initial;
+  }
+  return selectBestCandidate(linked, resolution, options);
+}
+
+export async function resolveGalleryCandidate(
+  candidate: MediaCandidate,
+  signal: AbortSignal,
+): Promise<MediaCandidate | null> {
+  if (!candidate.linkedPageUrl) return null;
+  signal.throwIfAborted();
+  const linked = await resolveLinkedDocument(candidate.linkedPageUrl, signal);
+  signal.throwIfAborted();
+  const selected = rankCandidates([...linked, candidate], {
+    showSameSizeImages: true,
+  })[0];
+  if (!selected || selected.url === candidate.url) return null;
+  const {
+    gallery: _gallery,
+    galleryIndex: _galleryIndex,
+    ...singleCandidate
+  } = selected;
+  return {
+    ...singleCandidate,
+    linkedPageUrl: candidate.linkedPageUrl,
+    ...(singleCandidate.caption || !candidate.caption
+      ? {}
+      : { caption: candidate.caption }),
+  };
+}
+
+function selectBestCandidate(
+  linked: MediaCandidate[],
+  resolution: DomResolution,
+  options: ResolverOptions,
+): MediaCandidate | null {
   const ranked = rankCandidates([...linked, ...resolution.candidates], {
     showSameSizeImages: options.showSameSizeImages,
     ...(resolution.renderedSize ? { renderedSize: resolution.renderedSize } : {}),

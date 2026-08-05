@@ -14,7 +14,7 @@ vi.mock("../../src/resolver/linked-document-resolver", () => ({
   resolveLinkedDocument: mocks.resolveLinkedDocument,
 }));
 
-import { resolveTarget } from "../../src/resolver";
+import { resolveGalleryCandidate, resolveTarget } from "../../src/resolver";
 
 describe("target resolver", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -147,7 +147,41 @@ describe("target resolver", () => {
     ]);
   });
 
-  it("prepares and returns the best local candidate when metadata exceeds its budget", async () => {
+  it("resolves a gallery item's detail page to a better image", async () => {
+    const thumbnail: MediaCandidate = {
+      url: "https://cdn.example/thumbnail.jpg",
+      kind: "image",
+      source: "srcset",
+      confidence: 90,
+      caption: "Gallery caption",
+      linkedPageUrl: "https://gallery.example/photos/123",
+    };
+    mocks.resolveLinkedDocument.mockResolvedValue([
+      {
+        url: "https://cdn.example/original.jpg",
+        kind: "image",
+        source: "document-metadata",
+        confidence: 98,
+      },
+    ]);
+
+    const result = await resolveGalleryCandidate(
+      thumbnail,
+      new AbortController().signal,
+    );
+
+    expect(mocks.resolveLinkedDocument).toHaveBeenCalledWith(
+      "https://gallery.example/photos/123",
+      expect.any(AbortSignal),
+    );
+    expect(result).toMatchObject({
+      url: "https://cdn.example/original.jpg",
+      caption: "Gallery caption",
+      linkedPageUrl: "https://gallery.example/photos/123",
+    });
+  });
+
+  it("returns the local candidate, then offers a better late metadata result", async () => {
     vi.useFakeTimers();
     const local: MediaCandidate = {
       url: "https://cdn.example/thumbnail.jpg",
@@ -166,12 +200,13 @@ describe("target resolver", () => {
       }),
     );
     const onLocalCandidate = vi.fn();
+    const onUpgrade = vi.fn();
 
     const resultPromise = resolveTarget(
       document.createElement("img"),
       { showSameSizeImages: false },
       new AbortController().signal,
-      { metadataBudgetMs: 75, onLocalCandidate },
+      { metadataBudgetMs: 75, onLocalCandidate, onUpgrade },
     );
 
     expect(onLocalCandidate).toHaveBeenCalledWith(local);
@@ -185,7 +220,16 @@ describe("target resolver", () => {
 
     await vi.advanceTimersByTimeAsync(1);
     await expect(resultPromise).resolves.toEqual(local);
-    finishMetadata?.([]);
+    expect(onUpgrade).toHaveBeenCalledOnce();
+
+    const original: MediaCandidate = {
+      url: "https://cdn.example/original.jpg",
+      kind: "image",
+      source: "document-metadata",
+      confidence: 98,
+    };
+    finishMetadata?.([original]);
+    await expect(onUpgrade.mock.calls[0]?.[0]).resolves.toMatchObject(original);
   });
 
   it("cancels a bounded metadata wait immediately when the hover is abandoned", async () => {

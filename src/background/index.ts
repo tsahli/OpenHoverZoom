@@ -1,4 +1,5 @@
 import { FetchDocumentError, fetchDocument } from "./fetch-document";
+import { createDownloadFilename } from "./download-filename";
 import { validateFetchUrl } from "./validate-url";
 import {
   isBackgroundRequest,
@@ -10,6 +11,24 @@ const activeFetches = new Map<string, AbortController>();
 
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id || !isBackgroundRequest(message)) return false;
+
+  if (message.type === "download-media") {
+    const url = validateFetchUrl(message.url);
+    if (!url) {
+      sendResponse({ accepted: false });
+      return false;
+    }
+    void chrome.downloads.download({
+      url: url.href,
+      filename: createDownloadFilename(),
+      conflictAction: "uniquify",
+      saveAs: false,
+    }).catch((error: unknown) => {
+      console.warn("[OpenHoverZoom] Image download failed", error);
+    });
+    sendResponse({ accepted: true });
+    return false;
+  }
 
   if (message.type === "cancel-fetch") {
     activeFetches.get(message.requestId)?.abort();

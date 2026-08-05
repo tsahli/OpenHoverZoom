@@ -1,6 +1,9 @@
-import { resolveTarget } from "../resolver";
+import { resolveGalleryCandidate, resolveTarget } from "../resolver";
+import type { MediaCandidate } from "../resolver/candidate";
 import { isSiteDisabled, type Settings } from "../shared/settings";
-import { PreviewOverlay } from "./preview-overlay";
+import { matchesDownloadShortcut } from "../shared/keyboard-shortcut";
+import { requestImageDownload } from "./download-client";
+import { PreviewOverlay, type GallerySelection } from "./preview-overlay";
 import { findHoverTarget } from "./target-inspector";
 
 const LOADING_DELAY_MILLISECONDS = 120;
@@ -20,6 +23,7 @@ export class HoverController {
   #loadingTimer: number | null = null;
   #leaveTimer: number | null = null;
   #request: AbortController | null = null;
+  #galleryRequest: AbortController | null = null;
   #sequence = 0;
 
   constructor(
@@ -31,13 +35,15 @@ export class HoverController {
     document.addEventListener("pointerout", this.#onPointerOut, true);
     document.addEventListener("pointermove", this.#onPointerMove, true);
     document.addEventListener("keydown", this.#onKeyDown, true);
+    document.addEventListener("visibilitychange", this.#onVisibilityChange);
+    window.addEventListener("blur", this.#onWindowBlur);
     window.addEventListener("resize", this.#onViewportChange, { passive: true });
     window.addEventListener("scroll", this.#onViewportChange, { capture: true, passive: true });
   }
 
   updateSettings(settings: Settings): void {
     this.#settings = settings;
-    this.overlay.updateSettings(settings.maxPreviewPercent);
+    this.overlay.updateSettings(settings.maxPreviewPercent, settings.downloadShortcut);
     if (!this.#isEnabled()) this.#clearAll();
   }
 
@@ -46,6 +52,8 @@ export class HoverController {
     document.removeEventListener("pointerout", this.#onPointerOut, true);
     document.removeEventListener("pointermove", this.#onPointerMove, true);
     document.removeEventListener("keydown", this.#onKeyDown, true);
+    document.removeEventListener("visibilitychange", this.#onVisibilityChange);
+    window.removeEventListener("blur", this.#onWindowBlur);
     window.removeEventListener("resize", this.#onViewportChange);
     window.removeEventListener("scroll", this.#onViewportChange, true);
     this.#clearAll();
@@ -56,9 +64,9 @@ export class HoverController {
   };
 
   #onPointerOut = (event: PointerEvent): void => {
-    if (event.relatedTarget === null) {
-      this.#trackPointer(null, { x: event.clientX, y: event.clientY });
-    }
+    // Moving into an iframe can provide the iframe element as relatedTarget,
+    // then stop delivering pointer events to this document entirely.
+    this.#trackPointer(event.relatedTarget, { x: event.clientX, y: event.clientY });
   };
 
   #onPointerMove = (event: PointerEvent): void => {
@@ -70,14 +78,33 @@ export class HoverController {
       this.#clearAll();
       return;
     }
-    const direction = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : null;
-    if (direction && this.overlay.navigateGallery(direction)) {
+    const imageUrl = this.overlay.getVisibleImageUrl();
+    if (imageUrl && matchesDownloadShortcut(event, this.#settings.downloadShortcut)) {
       event.preventDefault();
       event.stopPropagation();
+      if (!event.repeat) {
+        void requestImageDownload(imageUrl).catch((error: unknown) => {
+          console.warn("[OpenHoverZoom] Image download request failed", error);
+        });
+      }
+      return;
+    }
+    const direction = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : null;
+    const selection = direction ? this.overlay.navigateGallery(direction) : null;
+    if (selection) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.#upgradeGallerySelection(selection);
     }
   };
 
   #onViewportChange = (): void => this.overlay.reposition();
+
+  #onWindowBlur = (): void => this.#clearAll();
+
+  #onVisibilityChange = (): void => {
+    if (document.hidden) this.#clearAll();
+  };
 
   #trackPointer(eventTarget: EventTarget | null, point: TrackedPoint): void {
     if (!this.#isEnabled()) return;
@@ -87,7 +114,7 @@ export class HoverController {
   }
 
   #trackTarget(target: Element | null, point: TrackedPoint): void {
-    if (target === this.#activeTarget) {
+    if (target && target === this.#activeTarget) {
       this.#cancelPendingTarget();
       this.#cancelLeaveTimer();
       return;
@@ -95,6 +122,7 @@ export class HoverController {
     if (target) {
       this.#cancelLeaveTimer();
       if (target === this.#pendingTarget) return;
+      this.#cancelGalleryRequest();
       if (this.#request) {
         this.#cancelActiveRequest();
         this.#activeTarget = null;
@@ -108,6 +136,7 @@ export class HoverController {
     }
 
     this.#cancelPendingTarget();
+    this.#cancelGalleryRequest();
     if (this.#request) {
       this.#cancelActiveRequest();
       this.#activeTarget = null;
@@ -171,13 +200,19 @@ export class HoverController {
   async #resolve(target: Element, sequence: number): Promise<void> {
     const request = new AbortController();
     this.#request = request;
+    let upgradePromise: Promise<MediaCandidate | null> | null = null;
 
     try {
       const candidate = await resolveTarget(
         target,
         { showSameSizeImages: this.#settings.showSameSizeImages },
         request.signal,
-        { onLocalCandidate: (localCandidate) => this.overlay.prepare(localCandidate) },
+        {
+          onLocalCandidate: (localCandidate) => this.overlay.prepare(localCandidate),
+          onUpgrade: (upgrade) => {
+            upgradePromise = upgrade;
+          },
+        },
       );
       if (
         sequence !== this.#sequence ||
@@ -189,6 +224,19 @@ export class HoverController {
       else {
         this.#activeTarget = null;
         this.overlay.hide();
+        return;
+      }
+
+      if (upgradePromise) {
+        const upgrade = await upgradePromise;
+        if (
+          upgrade &&
+          sequence === this.#sequence &&
+          !request.signal.aborted &&
+          target === this.#activeTarget
+        ) {
+          this.overlay.show(upgrade);
+        }
       }
     } catch (error) {
       if (!(error instanceof DOMException && error.name === "AbortError")) {
@@ -202,12 +250,34 @@ export class HoverController {
     }
   }
 
+  #upgradeGallerySelection(selection: GallerySelection): void {
+    this.#cancelGalleryRequest();
+    if (!selection.candidate.linkedPageUrl) return;
+    const request = new AbortController();
+    this.#galleryRequest = request;
+    void resolveGalleryCandidate(selection.candidate, request.signal)
+      .then((candidate) => {
+        if (candidate && this.#galleryRequest === request && !request.signal.aborted) {
+          this.overlay.upgradeGalleryItem(selection, candidate);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          console.warn("[OpenHoverZoom] Gallery item upgrade failed", error);
+        }
+      })
+      .finally(() => {
+        if (this.#galleryRequest === request) this.#galleryRequest = null;
+      });
+  }
+
   #clearAll(): void {
     this.#activeTarget = null;
     this.#sequence += 1;
     this.#cancelPendingTarget();
     this.#cancelLeaveTimer();
     this.#cancelActiveRequest();
+    this.#cancelGalleryRequest();
     this.overlay.hide();
   }
 
@@ -224,6 +294,11 @@ export class HoverController {
   #cancelActiveRequest(): void {
     this.#request?.abort();
     this.#request = null;
+  }
+
+  #cancelGalleryRequest(): void {
+    this.#galleryRequest?.abort();
+    this.#galleryRequest = null;
   }
 
   #cancelLeaveTimer(): void {

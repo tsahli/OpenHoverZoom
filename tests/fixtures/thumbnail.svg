@@ -1,5 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="320" height="220" viewBox="0 0 320 220">
-  <rect width="320" height="220" fill="#334155" />
-  <circle cx="160" cy="95" r="58" fill="#38bdf8" />
-  <text x="160" y="190" fill="white" font-family="system-ui, sans-serif" font-size="24" text-anchor="middle">thumbnail</text>
-</svg>

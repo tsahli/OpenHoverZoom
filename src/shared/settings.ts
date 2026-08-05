@@ -1,8 +1,14 @@
+import {
+  DEFAULT_DOWNLOAD_SHORTCUT,
+  sanitizeDownloadShortcut,
+} from "./keyboard-shortcut";
+
 export interface Settings {
   enabled: boolean;
   hoverDelayMs: number;
   maxPreviewPercent: number;
   showSameSizeImages: boolean;
+  downloadShortcut: string;
   disabledSites: string[];
 }
 
@@ -11,6 +17,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = {
   hoverDelayMs: 250,
   maxPreviewPercent: 85,
   showSameSizeImages: false,
+  downloadShortcut: DEFAULT_DOWNLOAD_SHORTCUT,
   disabledSites: [],
 };
 
@@ -29,6 +36,7 @@ export function sanitizeSettings(value: unknown): Settings {
       typeof record.showSameSizeImages === "boolean"
         ? record.showSameSizeImages
         : DEFAULT_SETTINGS.showSameSizeImages,
+    downloadShortcut: sanitizeDownloadShortcut(record.downloadShortcut),
     disabledSites: sanitizeSites(record.disabledSites),
   };
 }

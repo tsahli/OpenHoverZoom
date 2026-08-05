@@ -1,5 +1,9 @@
 import type { MediaCandidate } from "../resolver/candidate";
 import {
+  DEFAULT_DOWNLOAD_SHORTCUT,
+  sanitizeDownloadShortcut,
+} from "../shared/keyboard-shortcut";
+import {
   calculatePlacement,
   type PlacementSide,
   type Point,
@@ -15,6 +19,11 @@ interface PreparedMedia {
   ready: Promise<boolean>;
 }
 
+export interface GallerySelection {
+  index: number;
+  candidate: MediaCandidate;
+}
+
 export class PreviewOverlay {
   readonly #host: HTMLDivElement;
   readonly #panel: HTMLDivElement;
@@ -23,13 +32,20 @@ export class PreviewOverlay {
   #hasAnchor = false;
   #preferredSide: PlacementSide | null = null;
   #maxPreviewPercent: number;
+  #downloadShortcut: string;
   #gallery: MediaCandidate[] = [];
   #galleryIndex = 0;
+  #requestedGalleryIndex = 0;
   #renderSequence = 0;
   #prepared: PreparedMedia | null = null;
+  #currentCandidate: MediaCandidate | null = null;
 
-  constructor(maxPreviewPercent: number) {
+  constructor(
+    maxPreviewPercent: number,
+    downloadShortcut = DEFAULT_DOWNLOAD_SHORTCUT,
+  ) {
     this.#maxPreviewPercent = maxPreviewPercent;
+    this.#downloadShortcut = sanitizeDownloadShortcut(downloadShortcut);
     this.#host = document.createElement("div");
     this.#host.id = HOST_ID;
     this.#host.setAttribute("aria-hidden", "true");
@@ -44,8 +60,11 @@ export class PreviewOverlay {
     document.documentElement.append(this.#host);
   }
 
-  updateSettings(maxPreviewPercent: number): void {
+  updateSettings(maxPreviewPercent: number, downloadShortcut = this.#downloadShortcut): void {
     this.#maxPreviewPercent = maxPreviewPercent;
+    this.#downloadShortcut = sanitizeDownloadShortcut(downloadShortcut);
+    const hint = this.#panel.querySelector<HTMLElement>(".download-hint");
+    if (hint) hint.textContent = this.#downloadHintText();
     this.#applySizeLimit();
     this.reposition();
   }
@@ -69,11 +88,24 @@ export class PreviewOverlay {
     return !this.#panel.hidden && this.#panel.querySelector(".media-frame") !== null;
   }
 
+  getVisibleImageUrl(): string | null {
+    if (
+      this.#panel.hidden ||
+      this.#currentCandidate?.kind !== "image" ||
+      !this.#panel.querySelector(".media-frame > img.media")
+    ) {
+      return null;
+    }
+    return this.#currentCandidate.url;
+  }
+
   showLoading(): void {
     this.#ensureConnected();
     this.#renderSequence += 1;
     this.#gallery = [];
     this.#galleryIndex = 0;
+    this.#requestedGalleryIndex = 0;
+    this.#currentCandidate = null;
     this.#panel.style.removeProperty("width");
     this.#panel.replaceChildren(this.#createLoader("Resolving preview"));
     this.#panel.className = "panel loading";
@@ -95,15 +127,38 @@ export class PreviewOverlay {
       ? suppliedGallery.map(stripGallery)
       : [stripGallery(candidate)];
     this.#galleryIndex = clampIndex(candidate.galleryIndex ?? 0, this.#gallery.length);
+    this.#requestedGalleryIndex = this.#galleryIndex;
     this.#gallery[this.#galleryIndex] = stripGallery(candidate);
     this.#loadIndex(this.#galleryIndex);
   }
 
-  navigateGallery(delta: -1 | 1): boolean {
-    if (this.#panel.hidden || this.#gallery.length < 2) return false;
+  navigateGallery(delta: -1 | 1): GallerySelection | null {
+    if (this.#panel.hidden || this.#gallery.length < 2) return null;
     const nextIndex =
-      (this.#galleryIndex + delta + this.#gallery.length) % this.#gallery.length;
+      (this.#requestedGalleryIndex + delta + this.#gallery.length) % this.#gallery.length;
+    const candidate = this.#gallery[nextIndex];
+    if (!candidate) return null;
     this.#loadIndex(nextIndex);
+    return { index: nextIndex, candidate };
+  }
+
+  upgradeGalleryItem(
+    selection: GallerySelection,
+    candidate: MediaCandidate,
+  ): boolean {
+    const current = this.#gallery[selection.index];
+    if (
+      !current ||
+      current.url !== selection.candidate.url ||
+      current.linkedPageUrl !== selection.candidate.linkedPageUrl ||
+      current.url === candidate.url
+    ) {
+      return false;
+    }
+    this.#gallery[selection.index] = stripGallery(candidate);
+    if (this.#requestedGalleryIndex === selection.index) {
+      this.#loadIndex(selection.index);
+    }
     return true;
   }
 
@@ -112,6 +167,8 @@ export class PreviewOverlay {
     this.#discardPrepared();
     this.#gallery = [];
     this.#galleryIndex = 0;
+    this.#requestedGalleryIndex = 0;
+    this.#currentCandidate = null;
     this.#hasAnchor = false;
     this.#preferredSide = null;
     this.#panel.style.removeProperty("width");
@@ -134,6 +191,7 @@ export class PreviewOverlay {
       this.#preferredSide ?? undefined,
     );
     this.#applySizeLimit(firstPlacement.maxWidth, firstPlacement.maxHeight);
+    this.#syncPanelWidthToMedia();
     const constrained = this.#panel.getBoundingClientRect();
     const placement = calculatePlacement(
       this.#anchor,
@@ -154,6 +212,7 @@ export class PreviewOverlay {
       this.hide();
       return;
     }
+    this.#requestedGalleryIndex = index;
 
     this.#ensureConnected();
     const sequence = ++this.#renderSequence;
@@ -179,6 +238,7 @@ export class PreviewOverlay {
       if (sequence !== this.#renderSequence) return;
       if (ready) {
         this.#galleryIndex = index;
+        this.#requestedGalleryIndex = index;
         this.#commitMedia(media, candidate);
         return;
       }
@@ -186,11 +246,14 @@ export class PreviewOverlay {
         kind: candidate.kind,
         source: candidate.source,
       });
-      if (hasVisibleMedia) preloader.remove();
+      if (hasVisibleMedia) {
+        this.#requestedGalleryIndex = this.#galleryIndex;
+        preloader.remove();
+      }
       else this.hide();
     });
-    const label = this.#panel.querySelector<HTMLElement>(".loader-label");
-    if (!hasVisibleMedia && label) label.textContent = "Loading preview";
+    const loader = this.#panel.querySelector<HTMLElement>(".loader");
+    if (!hasVisibleMedia && loader) loader.setAttribute("aria-label", "Loading preview");
     requestAnimationFrame(() => this.reposition());
   }
 
@@ -203,14 +266,21 @@ export class PreviewOverlay {
     this.#panel.replaceChildren(frame);
     this.#panel.className = "panel";
     this.#panel.hidden = false;
+    this.#currentCandidate = candidate;
     this.#applySizeLimit();
+    const metadata = this.#createMetadata(candidate);
+    if (metadata) this.#panel.append(metadata);
+    this.reposition();
+  }
+
+  #syncPanelWidthToMedia(): void {
+    const media = this.#panel.querySelector<HTMLElement>(".media-frame > .media");
+    if (!media) return;
+
     const mediaWidth = media.getBoundingClientRect().width;
     if (mediaWidth > 0) {
       this.#panel.style.width = `${Math.ceil(mediaWidth + PANEL_INLINE_BORDER_PIXELS)}px`;
     }
-    const metadata = this.#createMetadata(candidate);
-    if (metadata) this.#panel.append(metadata);
-    this.reposition();
   }
 
   #prepareMedia(candidate: MediaCandidate): PreparedMedia {
@@ -280,26 +350,33 @@ export class PreviewOverlay {
   #createLoader(label: string): HTMLDivElement {
     const loader = document.createElement("div");
     loader.className = "loader";
+    loader.setAttribute("aria-label", label);
     const spinner = document.createElement("span");
     spinner.className = "spinner";
-    const text = document.createElement("span");
-    text.className = "loader-label";
-    text.textContent = label;
-    loader.append(spinner, text);
+    loader.append(spinner);
     return loader;
   }
 
   #createMetadata(candidate: MediaCandidate): HTMLDivElement | null {
     const hasGallery = this.#gallery.length > 1;
-    if (!candidate.caption && !hasGallery) return null;
+    const canDownload = candidate.kind === "image";
+    const captionText = candidate.caption?.replace(/^file:\s*/iu, "").trim();
+    if (!captionText && !hasGallery && !canDownload) return null;
 
     const metadata = document.createElement("div");
     metadata.className = "metadata";
-    if (candidate.caption) {
+    if (captionText) {
       const caption = document.createElement("span");
       caption.className = "caption";
-      caption.textContent = candidate.caption;
+      caption.textContent = captionText;
       metadata.append(caption);
+    }
+    if (canDownload) {
+      const downloadHint = document.createElement("span");
+      downloadHint.className = "download-hint";
+      downloadHint.textContent = this.#downloadHintText();
+      downloadHint.title = "Download this image";
+      metadata.append(downloadHint);
     }
     if (hasGallery) {
       const status = document.createElement("span");
@@ -309,6 +386,10 @@ export class PreviewOverlay {
       metadata.append(status);
     }
     return metadata;
+  }
+
+  #downloadHintText(): string {
+    return `${this.#downloadShortcut} ⤓`;
   }
 
   #applySizeLimit(availableWidth = Number.POSITIVE_INFINITY, availableHeight = Number.POSITIVE_INFINITY): void {
@@ -362,6 +443,13 @@ const OVERLAY_CSS = `
   }
   .panel, .panel * { pointer-events: none !important; }
   .panel[hidden] { display: none; }
+  .panel.loading {
+    border-color: rgba(255, 255, 255, 0.18);
+    border-radius: 10px;
+    background: rgba(24, 27, 33, 0.68);
+    box-shadow: 0 7px 22px rgba(0, 0, 0, 0.28);
+    backdrop-filter: blur(9px) saturate(1.12);
+  }
   .media-frame {
     all: initial;
     display: block;
@@ -385,20 +473,11 @@ const OVERLAY_CSS = `
   .loader {
     all: initial;
     box-sizing: border-box;
-    display: flex;
-    min-width: 168px;
-    min-height: 104px;
+    display: grid;
+    width: 44px;
+    height: 44px;
     align-items: center;
     justify-content: center;
-    gap: 9px;
-    padding: 20px;
-    background:
-      linear-gradient(110deg, transparent 20%, rgba(255,255,255,0.045) 45%, transparent 70%),
-      rgba(24, 27, 33, 0.98);
-    background-size: 220% 100%;
-    color: rgba(246, 247, 249, 0.66);
-    font: 12px/1.3 system-ui, sans-serif;
-    animation: ohz-shimmer 1.7s ease-in-out infinite;
   }
   .spinner {
     all: initial;
@@ -410,13 +489,6 @@ const OVERLAY_CSS = `
     border-top-color: rgba(255, 255, 255, 0.72);
     border-radius: 50%;
     animation: ohz-spin 0.8s linear infinite;
-  }
-  .loader-label {
-    all: initial;
-    display: block;
-    color: rgba(246, 247, 249, 0.68);
-    font: 12px/1.3 system-ui, sans-serif;
-    letter-spacing: 0.01em;
   }
   .metadata {
     all: initial;
@@ -454,9 +526,18 @@ const OVERLAY_CSS = `
     letter-spacing: 0.02em;
     white-space: nowrap;
   }
+  .download-hint {
+    all: initial;
+    display: block;
+    flex: none;
+    margin-left: auto;
+    color: rgba(246, 247, 249, 0.62);
+    font: 11px/1.35 system-ui, sans-serif;
+    white-space: nowrap;
+  }
+  .download-hint + .gallery-status { margin-left: 10px; }
   @keyframes ohz-spin { to { transform: rotate(360deg); } }
-  @keyframes ohz-shimmer { 0%, 100% { background-position: 100% 0; } 50% { background-position: 0 0; } }
   @media (prefers-reduced-motion: reduce) {
-    .loader, .spinner { animation: none; }
+    .spinner { animation: none; }
   }
 `;

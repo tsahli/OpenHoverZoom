@@ -1,9 +1,16 @@
 import { loadSettings, saveSettings, type Settings } from "../shared/settings";
+import {
+  DEFAULT_DOWNLOAD_SHORTCUT,
+  sanitizeDownloadShortcut,
+  shortcutFromKeyboardEvent,
+} from "../shared/keyboard-shortcut";
 
 const form = requiredElement<HTMLFormElement>("settings-form");
 const hoverDelay = requiredElement<HTMLInputElement>("hover-delay");
 const previewSize = requiredElement<HTMLInputElement>("preview-size");
 const sameSize = requiredElement<HTMLInputElement>("same-size");
+const downloadShortcut = requiredElement<HTMLInputElement>("download-shortcut");
+const resetDownloadShortcut = requiredElement<HTMLButtonElement>("reset-download-shortcut");
 const sitesList = requiredElement<HTMLUListElement>("disabled-sites");
 const emptySites = requiredElement<HTMLElement>("empty-sites");
 const status = requiredElement<HTMLElement>("status");
@@ -14,6 +21,18 @@ void initialize();
 async function initialize(): Promise<void> {
   settings = await loadSettings();
   render();
+  downloadShortcut.addEventListener("keydown", (event) => {
+    const shortcut = shortcutFromKeyboardEvent(event);
+    if (!shortcut) return;
+    event.preventDefault();
+    event.stopPropagation();
+    downloadShortcut.value = shortcut;
+    status.textContent = `Download shortcut set to ${shortcut}. Save to apply.`;
+  });
+  resetDownloadShortcut.addEventListener("click", () => {
+    downloadShortcut.value = DEFAULT_DOWNLOAD_SHORTCUT;
+    status.textContent = "Download shortcut reset to Enter. Save to apply.";
+  });
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     void (async () => {
@@ -22,6 +41,7 @@ async function initialize(): Promise<void> {
         hoverDelayMs: hoverDelay.valueAsNumber,
         maxPreviewPercent: previewSize.valueAsNumber,
         showSameSizeImages: sameSize.checked,
+        downloadShortcut: sanitizeDownloadShortcut(downloadShortcut.value),
       };
       await saveSettings(settings);
       settings = await loadSettings();
@@ -35,6 +55,7 @@ function render(): void {
   hoverDelay.value = String(settings.hoverDelayMs);
   previewSize.value = String(settings.maxPreviewPercent);
   sameSize.checked = settings.showSameSizeImages;
+  downloadShortcut.value = settings.downloadShortcut;
   sitesList.replaceChildren();
   emptySites.hidden = settings.disabledSites.length > 0;
   for (const site of settings.disabledSites) {

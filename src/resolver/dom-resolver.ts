@@ -20,6 +20,9 @@ export const LAZY_SOURCE_ATTRIBUTES = [
 const MAX_CONTEXT_DEPTH = 5;
 const MAX_DESCENDANT_DEPTH = 4;
 const MAX_DESCENDANTS = 32;
+const MIN_COVERING_LINK_AREA_RATIO = 0.25;
+const MAX_COVERING_LINK_AREA_RATIO = 4;
+const MIN_COVERING_LINK_OVERLAP = 0.75;
 
 export interface DomResolution {
   candidates: MediaCandidate[];
@@ -41,9 +44,20 @@ export function resolveDomTarget(
   const associatedMedia = target instanceof HTMLAnchorElement
     ? findAssociatedLinkedMedia(target)
     : null;
-  const context = [
+  const initialContext = [
     ...collectContextElements(target),
     ...(associatedMedia ? collectContextElements(associatedMedia) : []),
+  ].filter((element, index, elements) => elements.indexOf(element) === index);
+  const initialImage = initialContext.find(
+    (element): element is HTMLImageElement => element instanceof HTMLImageElement,
+  );
+  const coveringAnchor =
+    initialImage && !initialContext.some((element) => element instanceof HTMLAnchorElement)
+      ? findCoveringSiblingAnchor(initialImage, baseUrl)
+      : null;
+  const context = [
+    ...initialContext,
+    ...(coveringAnchor ? collectContextElements(coveringAnchor) : []),
   ].filter((element, index, elements) => elements.indexOf(element) === index);
   const candidates: MediaCandidate[] = [];
   const primaryImage = context.find(
@@ -52,7 +66,12 @@ export function resolveDomTarget(
   const renderedSize = primaryImage ? sizeOf(primaryImage) : undefined;
   const caption = primaryImage?.alt.trim() || undefined;
   const gallery = primaryImage
-    ? discoverDomGallery(primaryImage, baseUrl, LAZY_SOURCE_ATTRIBUTES)
+    ? discoverDomGallery(
+        primaryImage,
+        baseUrl,
+        LAZY_SOURCE_ATTRIBUTES,
+        (image) => findLinkedPageUrl(image, baseUrl),
+      )
     : null;
 
   for (const element of context) {
@@ -161,6 +180,74 @@ function findAssociatedLinkedMedia(anchor: HTMLAnchorElement): Element | null {
     root = root.parentElement;
   }
   return null;
+}
+
+function findCoveringSiblingAnchor(
+  image: HTMLImageElement,
+  baseUrl: string,
+): HTMLAnchorElement | null {
+  const seen = new Set<HTMLAnchorElement>();
+  let best: { anchor: HTMLAnchorElement; score: number } | null = null;
+  let root = image.parentElement;
+
+  for (let depth = 0; root && depth < MAX_CONTEXT_DEPTH; depth += 1) {
+    for (const element of collectBoundedDescendants(root)) {
+      if (
+        !(element instanceof HTMLAnchorElement) ||
+        element.contains(image) ||
+        seen.has(element)
+      ) {
+        continue;
+      }
+      seen.add(element);
+      const href = element.getAttribute("href")?.trim();
+      const normalized = href ? normalizeUrl(href, baseUrl) : null;
+      if (!normalized || normalized === image.ownerDocument.location.href) continue;
+
+      const score = coveringLinkScore(element, image);
+      if (score >= MIN_COVERING_LINK_OVERLAP && (!best || score > best.score)) {
+        best = { anchor: element, score };
+      }
+    }
+    if (best?.score === 1) break;
+    root = root.parentElement;
+  }
+  return best?.anchor ?? null;
+}
+
+function findLinkedPageUrl(image: HTMLImageElement, baseUrl: string): string | null {
+  const ancestor = image.closest<HTMLAnchorElement>("a[href]");
+  const anchor = ancestor ?? findCoveringSiblingAnchor(image, baseUrl);
+  if (!anchor) return null;
+  const normalized = normalizeUrl(anchor.href, baseUrl);
+  return normalized === image.ownerDocument.location.href ? null : normalized;
+}
+
+function coveringLinkScore(anchor: Element, image: Element): number {
+  const anchorRect = anchor.getBoundingClientRect();
+  const imageRect = image.getBoundingClientRect();
+  const anchorArea = anchorRect.width * anchorRect.height;
+  const imageArea = imageRect.width * imageRect.height;
+  if (anchorArea <= 0 || imageArea <= 0) return 0;
+
+  const areaRatio = anchorArea / imageArea;
+  if (
+    areaRatio < MIN_COVERING_LINK_AREA_RATIO ||
+    areaRatio > MAX_COVERING_LINK_AREA_RATIO
+  ) {
+    return 0;
+  }
+  const intersectionWidth = Math.max(
+    0,
+    Math.min(anchorRect.right, imageRect.right) -
+      Math.max(anchorRect.left, imageRect.left),
+  );
+  const intersectionHeight = Math.max(
+    0,
+    Math.min(anchorRect.bottom, imageRect.bottom) -
+      Math.max(anchorRect.top, imageRect.top),
+  );
+  return intersectionWidth * intersectionHeight / Math.min(anchorArea, imageArea);
 }
 
 function addImageCandidates(

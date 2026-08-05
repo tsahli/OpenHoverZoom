@@ -65,6 +65,26 @@ describe("hover tracking", () => {
     expect(overlay.hide).not.toHaveBeenCalled();
   });
 
+  it("suppresses native media tooltips only during the active hover", () => {
+    const anchor = document.createElement("a");
+    anchor.title = "Linked image title";
+    const image = document.createElement("img");
+    image.id = "titled";
+    image.title = "Image title";
+    anchor.append(image);
+    document.body.append(anchor);
+
+    dispatchPointer(image, "pointerover", 100, 100);
+
+    expect(anchor.hasAttribute("title")).toBe(false);
+    expect(image.hasAttribute("title")).toBe(false);
+
+    window.dispatchEvent(new Event("blur"));
+
+    expect(anchor.title).toBe("Linked image title");
+    expect(image.title).toBe("Image title");
+  });
+
   it("re-hit-tests a shared event layer and preserves the old preview during a new hover delay", async () => {
     const layer = document.createElement("div");
     const first = imageWithId("first");

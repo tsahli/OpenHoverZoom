@@ -8,6 +8,7 @@ import { findHoverTarget } from "./target-inspector";
 
 const LOADING_DELAY_MILLISECONDS = 120;
 const LEAVE_GRACE_MILLISECONDS = 160;
+const MAX_TITLE_ANCESTORS = 6;
 
 interface TrackedPoint {
   x: number;
@@ -24,6 +25,8 @@ export class HoverController {
   #leaveTimer: number | null = null;
   #request: AbortController | null = null;
   #galleryRequest: AbortController | null = null;
+  #titleTarget: Element | null = null;
+  #suppressedTitles = new Map<Element, string>();
   #sequence = 0;
 
   constructor(
@@ -110,7 +113,45 @@ export class HoverController {
     if (!this.#isEnabled()) return;
     this.overlay.updatePointer(point.x, point.y);
     const target = findHoverTarget(eventTarget, point);
+    this.#syncNativeTitles(eventTarget, target);
     this.#trackTarget(target, point);
+  }
+
+  #syncNativeTitles(eventTarget: EventTarget | null, target: Element | null): void {
+    if (!target) {
+      this.#restoreNativeTitles();
+      return;
+    }
+    if (target !== this.#titleTarget) {
+      this.#restoreNativeTitles();
+      this.#titleTarget = target;
+    }
+    this.#suppressTitleChain(eventTarget);
+    this.#suppressTitleChain(target);
+  }
+
+  #suppressTitleChain(start: EventTarget | null): void {
+    let current = start instanceof Element ? start : null;
+    for (
+      let depth = 0;
+      current && depth < MAX_TITLE_ANCESTORS;
+      depth += 1, current = current.parentElement
+    ) {
+      const title = current.getAttribute("title");
+      if (title === null || title.trim().length === 0) continue;
+      if (!this.#suppressedTitles.has(current)) {
+        this.#suppressedTitles.set(current, title);
+      }
+      current.removeAttribute("title");
+    }
+  }
+
+  #restoreNativeTitles(): void {
+    for (const [element, title] of this.#suppressedTitles) {
+      if (!element.hasAttribute("title")) element.setAttribute("title", title);
+    }
+    this.#suppressedTitles.clear();
+    this.#titleTarget = null;
   }
 
   #trackTarget(target: Element | null, point: TrackedPoint): void {
@@ -223,6 +264,7 @@ export class HoverController {
       if (candidate) this.overlay.show(candidate);
       else {
         this.#activeTarget = null;
+        this.#restoreNativeTitles();
         this.overlay.hide();
         return;
       }
@@ -242,6 +284,7 @@ export class HoverController {
       if (!(error instanceof DOMException && error.name === "AbortError")) {
         console.warn("[OpenHoverZoom] Preview resolution failed", error);
         this.#activeTarget = null;
+        this.#restoreNativeTitles();
         this.overlay.hide();
       }
     } finally {
@@ -278,6 +321,7 @@ export class HoverController {
     this.#cancelLeaveTimer();
     this.#cancelActiveRequest();
     this.#cancelGalleryRequest();
+    this.#restoreNativeTitles();
     this.overlay.hide();
   }
 

@@ -2,49 +2,38 @@
 
 <img src="static/icons/ohz-logo.svg" alt="OpenHoverZoom OHZ logo" width="96">
 
-OpenHoverZoom lets you preview larger images and supported media without leaving
-the page you are browsing. Point at a thumbnail or media link to open a preview;
-when a gallery is available, use the arrow keys to move through it. Press Enter
-while previewing an image to save it to your Downloads folder. You can change
-the download shortcut from the extension's options.
+Hover over a thumbnail or media link to preview the full-size image, video, or
+audio without leaving the page. Use the arrow keys to browse galleries. Press
+Enter to download the visible image; you can change this shortcut in the options.
 
 ![OpenHoverZoom previewing a Wikimedia Commons gallery](docs/screenshot.png)
 
-## Why OpenHoverZoom?
+## Privacy
 
-OpenHoverZoom is built from scratch to be open, understandable, and cautious:
+OpenHoverZoom has no tracking, analytics, accounts, ads, or backend. It does not
+download executable code or remote rules, and settings stay in your browser.
 
-- The complete source code is public and can be reviewed.
-- It has no tracking, analytics, accounts, ads, or remote service.
-- It never downloads executable code or website rules.
-- Settings stay in your browser.
-- It activates only when a link or thumbnail provides good evidence that media
-  is available, instead of probing every link on a page.
-
-The extension needs access to pages you visit so it can inspect thumbnails and
-load their larger media. It does not collect or send your browsing activity,
-page content, form data, or credentials.
+The extension needs access to visited pages to inspect thumbnails and load
+larger media. No browsing activity, page content, form data, or credentials are
+collected or sent to OpenHoverZoom.
 
 ## Run it locally
 
-You will need [Node.js](https://nodejs.org/) version 22 or newer and a Chromium
-browser such as Brave or Chrome.
+You need [Node.js](https://nodejs.org/) 22 or newer and a Chromium browser such
+as Brave or Chrome.
 
-1. Download or clone this repository, then open a terminal in its folder.
-2. Install the local build tools and create the extension:
+Install the dependencies and build the extension:
 
 ```sh
 npm install
 npm run build
 ```
 
-3. Open `brave://extensions` in Brave or `chrome://extensions` in Chrome.
-4. Turn on **Developer mode**.
-5. Choose **Load unpacked** and select the `dist` folder in this repository.
-6. Open or refresh a webpage, then hover over an image thumbnail to try it.
+Open `brave://extensions` or `chrome://extensions`, enable **Developer mode**,
+choose **Load unpacked**, and select the generated `dist` folder.
 
-After changing the code, run `npm run build`, click **Reload** on the extension's
-card, and refresh the page you are testing.
+After changing the code, rebuild, reload the extension, and refresh the page you
+are testing.
 
 To run all automated checks:
 

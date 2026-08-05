@@ -4,7 +4,9 @@
 
 OpenHoverZoom lets you preview larger images and supported media without leaving
 the page you are browsing. Point at a thumbnail or media link to open a preview;
-when a gallery is available, use the arrow keys to move through it.
+when a gallery is available, use the arrow keys to move through it. Press Enter
+while previewing an image to save it to your Downloads folder. You can change
+the download shortcut from the extension's options.
 
 ## Why OpenHoverZoom?
 

@@ -1,16 +1,18 @@
 import { extractBackgroundImageUrls } from "../resolver/background-image";
 import { LAZY_SOURCE_ATTRIBUTES } from "../resolver/dom-resolver";
 import { mediaKindFromUrl } from "../resolver/media-type";
+import {
+  comparableAreaOverlap,
+  intersectionArea,
+  walkBoundedDescendants,
+} from "../shared/dom";
 
 const MAX_DEPTH = 5;
 const MAX_POINT_STACK = 12;
-const MAX_DESCENDANT_DEPTH = 4;
-const MAX_DESCENDANTS = 32;
+const MEDIA_DESCENDANT_WALK = { maxDepth: 4, maxElements: 32 } as const;
 const MAX_MEDIA_LINK_ANCESTORS = 4;
 const MAX_UI_SURFACE_ANCESTORS = 8;
 const MIN_UI_SURFACE_CONTROLS = 3;
-const MIN_ASSOCIATED_SURFACE_AREA_RATIO = 0.25;
-const MAX_ASSOCIATED_SURFACE_AREA_RATIO = 4;
 const MIN_ASSOCIATED_SURFACE_OVERLAP = 0.75;
 const MIN_MEDIA_SURFACE_COVERAGE = 0.6;
 const OPAQUE_LAYER_ALPHA = 0.85;
@@ -148,19 +150,8 @@ function isMediaDominatedSurface(
   const mediaRect = media.getBoundingClientRect();
   const surfaceArea = surfaceRect.width * surfaceRect.height;
   if (surfaceArea <= 0) return false;
-
-  const intersectionWidth = Math.max(
-    0,
-    Math.min(surfaceRect.right, mediaRect.right) -
-      Math.max(surfaceRect.left, mediaRect.left),
-  );
-  const intersectionHeight = Math.max(
-    0,
-    Math.min(surfaceRect.bottom, mediaRect.bottom) -
-      Math.max(surfaceRect.top, mediaRect.top),
-  );
   return (
-    intersectionWidth * intersectionHeight / surfaceArea >=
+    intersectionArea(surfaceRect, mediaRect) / surfaceArea >=
     MIN_MEDIA_SURFACE_COVERAGE
   );
 }
@@ -214,35 +205,7 @@ function isAssociatedSurface(foreground: Element, candidate: Element): boolean {
     return true;
   }
 
-  const foregroundRect = foreground.getBoundingClientRect();
-  const candidateRect = candidate.getBoundingClientRect();
-  const foregroundArea = foregroundRect.width * foregroundRect.height;
-  const candidateArea = candidateRect.width * candidateRect.height;
-  if (foregroundArea <= 0 || candidateArea <= 0) return false;
-
-  const areaRatio = foregroundArea / candidateArea;
-  if (
-    areaRatio < MIN_ASSOCIATED_SURFACE_AREA_RATIO ||
-    areaRatio > MAX_ASSOCIATED_SURFACE_AREA_RATIO
-  ) {
-    return false;
-  }
-
-  const intersectionWidth = Math.max(
-    0,
-    Math.min(foregroundRect.right, candidateRect.right) -
-      Math.max(foregroundRect.left, candidateRect.left),
-  );
-  const intersectionHeight = Math.max(
-    0,
-    Math.min(foregroundRect.bottom, candidateRect.bottom) -
-      Math.max(foregroundRect.top, candidateRect.top),
-  );
-  const intersectionArea = intersectionWidth * intersectionHeight;
-  return (
-    intersectionArea / Math.min(foregroundArea, candidateArea) >=
-    MIN_ASSOCIATED_SURFACE_OVERLAP
-  );
+  return comparableAreaOverlap(foreground, candidate) >= MIN_ASSOCIATED_SURFACE_OVERLAP;
 }
 
 function isBlockingSurface(element: Element): boolean {
@@ -294,20 +257,9 @@ function findBoundedMediaDescendant(
   root: Element,
   pointer?: PointerPosition,
 ): Element | null {
-  const queue = Array.from(root.children, (element) => ({ element, depth: 1 }));
-  let inspected = 0;
-
-  while (queue.length > 0 && inspected < MAX_DESCENDANTS) {
-    const entry = queue.shift();
-    if (!entry) break;
-    inspected += 1;
-
-    if (isMediaElement(entry.element) && (!pointer || containsPoint(entry.element, pointer))) {
-      return entry.element;
-    }
-    if (entry.depth >= MAX_DESCENDANT_DEPTH) continue;
-    for (const child of Array.from(entry.element.children)) {
-      queue.push({ element: child, depth: entry.depth + 1 });
+  for (const element of walkBoundedDescendants(root, MEDIA_DESCENDANT_WALK)) {
+    if (isMediaElement(element) && (!pointer || containsPoint(element, pointer))) {
+      return element;
     }
   }
   return null;
@@ -369,23 +321,14 @@ function hasMatchingLinkedMedia(anchor: HTMLAnchorElement): boolean {
 
   let root = anchor.parentElement;
   for (let depth = 0; root && depth < MAX_MEDIA_LINK_ANCESTORS; depth += 1) {
-    const queue = Array.from(root.children, (element) => ({ element, depth: 1 }));
-    let inspected = 0;
-    while (queue.length > 0 && inspected < MAX_DESCENDANTS) {
-      const entry = queue.shift();
-      if (!entry) break;
-      inspected += 1;
+    for (const element of walkBoundedDescendants(root, MEDIA_DESCENDANT_WALK)) {
       if (
-        entry.element instanceof HTMLAnchorElement &&
-        entry.element !== anchor &&
-        entry.element.href === href &&
-        findBoundedMediaDescendant(entry.element)
+        element instanceof HTMLAnchorElement &&
+        element !== anchor &&
+        element.href === href &&
+        findBoundedMediaDescendant(element)
       ) {
         return true;
-      }
-      if (entry.depth >= MAX_DESCENDANT_DEPTH) continue;
-      for (const child of Array.from(entry.element.children)) {
-        queue.push({ element: child, depth: entry.depth + 1 });
       }
     }
     root = root.parentElement;

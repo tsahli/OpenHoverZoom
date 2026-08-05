@@ -1,5 +1,4 @@
 import { resolveGalleryCandidate, resolveTarget } from "../resolver";
-import type { MediaCandidate } from "../resolver/candidate";
 import { isSiteDisabled, type Settings } from "../shared/settings";
 import { matchesDownloadShortcut } from "../shared/keyboard-shortcut";
 import { requestImageDownload } from "./download-client";
@@ -27,7 +26,6 @@ export class HoverController {
   #galleryRequest: AbortController | null = null;
   #titleTarget: Element | null = null;
   #suppressedTitles = new Map<Element, string>();
-  #sequence = 0;
 
   constructor(
     private readonly overlay: PreviewOverlay,
@@ -230,38 +228,29 @@ export class HoverController {
     this.#clearLoadingTimer();
     this.#cancelActiveRequest();
     this.#activeTarget = target;
-    const sequence = ++this.#sequence;
     this.overlay.setAnchor(point.x, point.y);
     if (!this.overlay.isVisible() && !this.#resolvesSilently(target)) {
       this.overlay.showLoading();
     }
-    void this.#resolve(target, sequence);
+    void this.#resolve(target);
   }
 
-  async #resolve(target: Element, sequence: number): Promise<void> {
+  async #resolve(target: Element): Promise<void> {
     const request = new AbortController();
     this.#request = request;
-    let upgradePromise: Promise<MediaCandidate | null> | null = null;
 
     try {
-      const candidate = await resolveTarget(
+      const resolution = await resolveTarget(
         target,
         { showSameSizeImages: this.#settings.showSameSizeImages },
         request.signal,
         {
           onLocalCandidate: (localCandidate) => this.overlay.prepare(localCandidate),
-          onUpgrade: (upgrade) => {
-            upgradePromise = upgrade;
-          },
         },
       );
-      if (
-        sequence !== this.#sequence ||
-        request.signal.aborted ||
-        target !== this.#activeTarget
-      ) return;
+      if (this.#request !== request || request.signal.aborted) return;
       this.#clearLoadingTimer();
-      if (candidate) this.overlay.show(candidate);
+      if (resolution.candidate) this.overlay.show(resolution.candidate);
       else {
         this.#activeTarget = null;
         this.#restoreNativeTitles();
@@ -269,18 +258,18 @@ export class HoverController {
         return;
       }
 
-      if (upgradePromise) {
-        const upgrade = await upgradePromise;
+      if (resolution.upgrade) {
+        const upgrade = await resolution.upgrade;
         if (
           upgrade &&
-          sequence === this.#sequence &&
-          !request.signal.aborted &&
-          target === this.#activeTarget
+          this.#request === request &&
+          !request.signal.aborted
         ) {
           this.overlay.show(upgrade);
         }
       }
     } catch (error) {
+      if (this.#request !== request || request.signal.aborted) return;
       if (!(error instanceof DOMException && error.name === "AbortError")) {
         console.warn("[OpenHoverZoom] Preview resolution failed", error);
         this.#activeTarget = null;
@@ -316,7 +305,6 @@ export class HoverController {
 
   #clearAll(): void {
     this.#activeTarget = null;
-    this.#sequence += 1;
     this.#cancelPendingTarget();
     this.#cancelLeaveTimer();
     this.#cancelActiveRequest();

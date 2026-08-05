@@ -27,7 +27,6 @@ export interface GallerySelection {
 export class PreviewOverlay {
   readonly #host: HTMLDivElement;
   readonly #panel: HTMLDivElement;
-  #pointer: Point = { x: 0, y: 0 };
   #anchor: Point = { x: 0, y: 0 };
   #hasAnchor = false;
   #preferredSide: PlacementSide | null = null;
@@ -70,8 +69,7 @@ export class PreviewOverlay {
   }
 
   updatePointer(x: number, y: number): void {
-    this.#pointer = { x, y };
-    if (!this.#hasAnchor) this.#anchor = this.#pointer;
+    if (!this.#hasAnchor) this.#anchor = { x, y };
   }
 
   setAnchor(x: number, y: number): void {
@@ -85,18 +83,13 @@ export class PreviewOverlay {
   }
 
   hasVisibleMedia(): boolean {
-    return !this.#panel.hidden && this.#panel.querySelector(".media-frame") !== null;
+    return !this.#panel.hidden && this.#currentCandidate !== null;
   }
 
   getVisibleImageUrl(): string | null {
-    if (
-      this.#panel.hidden ||
-      this.#currentCandidate?.kind !== "image" ||
-      !this.#panel.querySelector(".media-frame > img.media")
-    ) {
-      return null;
-    }
-    return this.#currentCandidate.url;
+    return !this.#panel.hidden && this.#currentCandidate?.kind === "image"
+      ? this.#currentCandidate.url
+      : null;
   }
 
   showLoading(): void {

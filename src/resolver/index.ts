@@ -9,8 +9,12 @@ export interface ResolverOptions {
 
 export interface ResolverHooks {
   onLocalCandidate?: (candidate: MediaCandidate) => void;
-  onUpgrade?: (candidate: Promise<MediaCandidate | null>) => void;
   metadataBudgetMs?: number;
+}
+
+export interface ResolvedTarget {
+  candidate: MediaCandidate | null;
+  upgrade: Promise<MediaCandidate | null> | null;
 }
 
 const DEFAULT_METADATA_BUDGET_MILLISECONDS = 180;
@@ -21,14 +25,14 @@ export async function resolveTarget(
   options: ResolverOptions,
   signal: AbortSignal,
   hooks: ResolverHooks = {},
-): Promise<MediaCandidate | null> {
+): Promise<ResolvedTarget> {
   signal.throwIfAborted();
   const resolution = resolveDomTarget(target, options);
   const direct = resolution.candidates[0];
   const local = resolution.candidates.find((candidate) => candidate.source !== "direct-link");
   if (local) hooks.onLocalCandidate?.(attachGallery(local, resolution));
   if (direct && direct.confidence >= 90 && direct.source !== "direct-link") {
-    return attachGallery(direct, resolution);
+    return { candidate: attachGallery(direct, resolution), upgrade: null };
   }
 
   const linkedPromise = resolution.anchorUrl
@@ -44,18 +48,17 @@ export async function resolveTarget(
   signal.throwIfAborted();
   if (linked === METADATA_TIMEOUT) {
     const initial = attachGallery(local!, resolution);
-    if (hooks.onUpgrade) {
-      hooks.onUpgrade(
-        linkedPromise.then((lateLinked) => {
-          signal.throwIfAborted();
-          const upgraded = selectBestCandidate(lateLinked, resolution, options);
-          return upgraded && upgraded.url !== initial.url ? upgraded : null;
-        }),
-      );
-    }
-    return initial;
+    const upgrade = linkedPromise.then((lateLinked) => {
+      signal.throwIfAborted();
+      const upgraded = selectBestCandidate(lateLinked, resolution, options);
+      return upgraded && upgraded.url !== initial.url ? upgraded : null;
+    });
+    return { candidate: initial, upgrade };
   }
-  return selectBestCandidate(linked, resolution, options);
+  return {
+    candidate: selectBestCandidate(linked, resolution, options),
+    upgrade: null,
+  };
 }
 
 export async function resolveGalleryCandidate(

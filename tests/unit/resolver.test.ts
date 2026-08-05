@@ -52,8 +52,11 @@ describe("target resolver", () => {
       expect.any(AbortSignal),
     );
     expect(result).toMatchObject({
-      url: "https://cdn.example/original.jpg",
-      source: "document-metadata",
+      candidate: {
+        url: "https://cdn.example/original.jpg",
+        source: "document-metadata",
+      },
+      upgrade: null,
     });
   });
 
@@ -77,7 +80,10 @@ describe("target resolver", () => {
     );
 
     expect(mocks.resolveLinkedDocument).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ url: "https://cdn.example/large.jpg", source: "srcset" });
+    expect(result).toMatchObject({
+      candidate: { url: "https://cdn.example/large.jpg", source: "srcset" },
+      upgrade: null,
+    });
   });
 
   it("uses linked metadata that resolves within the local fallback budget", async () => {
@@ -110,8 +116,11 @@ describe("target resolver", () => {
 
     expect(onLocalCandidate).toHaveBeenCalledWith(local);
     expect(result).toMatchObject({
-      url: "https://cdn.example/original.jpg",
-      source: "document-metadata",
+      candidate: {
+        url: "https://cdn.example/original.jpg",
+        source: "document-metadata",
+      },
+      upgrade: null,
     });
   });
 
@@ -140,8 +149,8 @@ describe("target resolver", () => {
       new AbortController().signal,
     );
 
-    expect(result?.galleryIndex).toBe(1);
-    expect(result?.gallery?.map((item) => item.url)).toEqual([
+    expect(result.candidate?.galleryIndex).toBe(1);
+    expect(result.candidate?.gallery?.map((item) => item.url)).toEqual([
       "https://cdn.example/first.jpg",
       "https://cdn.example/second.jpg",
     ]);
@@ -200,13 +209,11 @@ describe("target resolver", () => {
       }),
     );
     const onLocalCandidate = vi.fn();
-    const onUpgrade = vi.fn();
-
     const resultPromise = resolveTarget(
       document.createElement("img"),
       { showSameSizeImages: false },
       new AbortController().signal,
-      { metadataBudgetMs: 75, onLocalCandidate, onUpgrade },
+      { metadataBudgetMs: 75, onLocalCandidate },
     );
 
     expect(onLocalCandidate).toHaveBeenCalledWith(local);
@@ -219,8 +226,9 @@ describe("target resolver", () => {
     expect(settled).toBe(false);
 
     await vi.advanceTimersByTimeAsync(1);
-    await expect(resultPromise).resolves.toEqual(local);
-    expect(onUpgrade).toHaveBeenCalledOnce();
+    const result = await resultPromise;
+    expect(result.candidate).toEqual(local);
+    expect(result.upgrade).not.toBeNull();
 
     const original: MediaCandidate = {
       url: "https://cdn.example/original.jpg",
@@ -229,7 +237,7 @@ describe("target resolver", () => {
       confidence: 98,
     };
     finishMetadata?.([original]);
-    await expect(onUpgrade.mock.calls[0]?.[0]).resolves.toMatchObject(original);
+    await expect(result.upgrade).resolves.toMatchObject(original);
   });
 
   it("cancels a bounded metadata wait immediately when the hover is abandoned", async () => {

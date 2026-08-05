@@ -6,6 +6,7 @@ import { applyRewriteRules } from "./rewrite-rules";
 import { rankCandidates } from "./score-candidates";
 import { selectLargestSrcset } from "./srcset";
 import { normalizeUrl } from "./url";
+import { comparableAreaOverlap, walkBoundedDescendants } from "../shared/dom";
 
 export const LAZY_SOURCE_ATTRIBUTES = [
   "data-src",
@@ -18,10 +19,7 @@ export const LAZY_SOURCE_ATTRIBUTES = [
 ] as const;
 
 const MAX_CONTEXT_DEPTH = 5;
-const MAX_DESCENDANT_DEPTH = 4;
-const MAX_DESCENDANTS = 32;
-const MIN_COVERING_LINK_AREA_RATIO = 0.25;
-const MAX_COVERING_LINK_AREA_RATIO = 4;
+const CONTEXT_DESCENDANT_WALK = { maxDepth: 4, maxElements: 32 } as const;
 const MIN_COVERING_LINK_OVERLAP = 0.75;
 
 export interface DomResolution {
@@ -133,27 +131,11 @@ export function collectContextElements(target: Element): Element[] {
   for (let depth = 0; current && depth < MAX_CONTEXT_DEPTH; depth += 1) {
     elements.push(current);
     if (current instanceof HTMLPictureElement || current instanceof HTMLAnchorElement) {
-      elements.push(...collectBoundedDescendants(current));
+      elements.push(...walkBoundedDescendants(current, CONTEXT_DESCENDANT_WALK));
     }
     current = current.parentElement;
   }
   return [...new Set(elements)];
-}
-
-function collectBoundedDescendants(element: Element): Element[] {
-  const descendants: Element[] = [];
-  const queue = Array.from(element.children, (child) => ({ element: child, depth: 1 }));
-
-  while (queue.length > 0 && descendants.length < MAX_DESCENDANTS) {
-    const entry = queue.shift();
-    if (!entry) break;
-    descendants.push(entry.element);
-    if (entry.depth >= MAX_DESCENDANT_DEPTH) continue;
-    for (const child of Array.from(entry.element.children)) {
-      queue.push({ element: child, depth: entry.depth + 1 });
-    }
-  }
-  return descendants;
 }
 
 function findAssociatedLinkedMedia(anchor: HTMLAnchorElement): Element | null {
@@ -162,13 +144,13 @@ function findAssociatedLinkedMedia(anchor: HTMLAnchorElement): Element | null {
 
   let root = anchor.parentElement;
   for (let depth = 0; root && depth < MAX_CONTEXT_DEPTH; depth += 1) {
-    for (const element of collectBoundedDescendants(root)) {
+    for (const element of walkBoundedDescendants(root, CONTEXT_DESCENDANT_WALK)) {
       if (
         element instanceof HTMLAnchorElement &&
         element !== anchor &&
         element.href === href
       ) {
-        const media = collectBoundedDescendants(element).find(
+        const media = [...walkBoundedDescendants(element, CONTEXT_DESCENDANT_WALK)].find(
           (descendant) =>
             descendant instanceof HTMLImageElement ||
             descendant instanceof HTMLPictureElement ||
@@ -191,7 +173,7 @@ function findCoveringSiblingAnchor(
   let root = image.parentElement;
 
   for (let depth = 0; root && depth < MAX_CONTEXT_DEPTH; depth += 1) {
-    for (const element of collectBoundedDescendants(root)) {
+    for (const element of walkBoundedDescendants(root, CONTEXT_DESCENDANT_WALK)) {
       if (
         !(element instanceof HTMLAnchorElement) ||
         element.contains(image) ||
@@ -224,30 +206,7 @@ function findLinkedPageUrl(image: HTMLImageElement, baseUrl: string): string | n
 }
 
 function coveringLinkScore(anchor: Element, image: Element): number {
-  const anchorRect = anchor.getBoundingClientRect();
-  const imageRect = image.getBoundingClientRect();
-  const anchorArea = anchorRect.width * anchorRect.height;
-  const imageArea = imageRect.width * imageRect.height;
-  if (anchorArea <= 0 || imageArea <= 0) return 0;
-
-  const areaRatio = anchorArea / imageArea;
-  if (
-    areaRatio < MIN_COVERING_LINK_AREA_RATIO ||
-    areaRatio > MAX_COVERING_LINK_AREA_RATIO
-  ) {
-    return 0;
-  }
-  const intersectionWidth = Math.max(
-    0,
-    Math.min(anchorRect.right, imageRect.right) -
-      Math.max(anchorRect.left, imageRect.left),
-  );
-  const intersectionHeight = Math.max(
-    0,
-    Math.min(anchorRect.bottom, imageRect.bottom) -
-      Math.max(anchorRect.top, imageRect.top),
-  );
-  return intersectionWidth * intersectionHeight / Math.min(anchorArea, imageArea);
+  return comparableAreaOverlap(anchor, image);
 }
 
 function addImageCandidates(

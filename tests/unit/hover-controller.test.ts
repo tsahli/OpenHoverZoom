@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ResolvedTarget } from "../../src/resolver";
 import type { MediaCandidate } from "../../src/resolver/candidate";
 import { DEFAULT_SETTINGS } from "../../src/shared/settings";
 
@@ -34,7 +35,10 @@ describe("hover tracking", () => {
     mocks.resolveGalleryCandidate.mockResolvedValue(null);
     mocks.requestImageDownload.mockReset();
     mocks.requestImageDownload.mockResolvedValue(undefined);
-    mocks.resolveTarget.mockImplementation(async (target: Element) => candidateFor(target));
+    mocks.resolveTarget.mockImplementation(async (target: Element) => ({
+      candidate: candidateFor(target),
+      upgrade: null,
+    }));
     overlay = new OverlayDouble();
     controller = new HoverController(
       overlay as unknown as PreviewOverlay,
@@ -162,7 +166,7 @@ describe("hover tracking", () => {
     let resolutionSignal: AbortSignal | undefined;
     mocks.resolveTarget.mockImplementation((_target, _options, signal: AbortSignal) => {
       resolutionSignal = signal;
-      return new Promise<MediaCandidate | null>(() => undefined);
+      return new Promise(() => undefined);
     });
 
     dispatchPointer(image, "pointerover", 100, 100);
@@ -195,9 +199,9 @@ describe("hover tracking", () => {
     mocks.resolveTarget.mockImplementation((target: Element, _options, signal: AbortSignal) => {
       if (target === second) {
         secondSignal = signal;
-        return new Promise<MediaCandidate | null>(() => undefined);
+        return new Promise(() => undefined);
       }
-      return Promise.resolve(candidateFor(target));
+      return Promise.resolve({ candidate: candidateFor(target), upgrade: null });
     });
 
     dispatchPointer(first, "pointerover", 100, 100);
@@ -213,11 +217,39 @@ describe("hover tracking", () => {
     expect(overlay.show).toHaveBeenLastCalledWith(expect.objectContaining({ caption: "first" }));
   });
 
+  it("ignores a canceled resolution that completes after its replacement", async () => {
+    const first = imageWithId("first");
+    const second = imageWithId("second");
+    let finishFirst: ((resolution: ResolvedTarget) => void) | undefined;
+    mocks.resolveTarget.mockImplementation((target: Element) => {
+      if (target === first) {
+        return new Promise<ResolvedTarget>((resolve) => {
+          finishFirst = resolve;
+        });
+      }
+      return Promise.resolve({ candidate: candidateFor(target), upgrade: null });
+    });
+
+    dispatchPointer(first, "pointerover", 100, 100);
+    await vi.advanceTimersByTimeAsync(250);
+    dispatchPointer(second, "pointermove", 200, 100);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(overlay.show).toHaveBeenCalledOnce();
+    expect(overlay.show).toHaveBeenLastCalledWith(
+      expect.objectContaining({ caption: "second" }),
+    );
+
+    finishFirst?.({ candidate: candidateFor(first), upgrade: null });
+    await Promise.resolve();
+
+    expect(overlay.show).toHaveBeenCalledOnce();
+  });
+
   it("resolves link targets silently and stays inert when no media is found", async () => {
     const anchor = document.createElement("a");
     anchor.href = "https://cdn.example/file.jpg";
     document.body.append(anchor);
-    mocks.resolveTarget.mockResolvedValueOnce(null);
+    mocks.resolveTarget.mockResolvedValueOnce({ candidate: null, upgrade: null });
 
     dispatchPointer(anchor, "pointerover", 100, 100);
     await vi.advanceTimersByTimeAsync(250);
@@ -245,13 +277,11 @@ describe("hover tracking", () => {
   it("replaces a local preview when a better deferred candidate is ready", async () => {
     const image = imageWithId("first");
     let finishUpgrade: ((candidate: MediaCandidate) => void) | undefined;
-    mocks.resolveTarget.mockImplementation(async (target: Element, _options, _signal, hooks) => {
-      hooks.onUpgrade(
-        new Promise<MediaCandidate>((resolve) => {
-          finishUpgrade = resolve;
-        }),
-      );
-      return candidateFor(target);
+    mocks.resolveTarget.mockImplementation(async (target: Element) => {
+      const upgrade = new Promise<MediaCandidate>((resolve) => {
+        finishUpgrade = resolve;
+      });
+      return { candidate: candidateFor(target), upgrade };
     });
 
     dispatchPointer(image, "pointerover", 100, 100);

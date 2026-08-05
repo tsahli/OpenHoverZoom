@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenHoverZoom options</title>
+    <link rel="stylesheet" href="settings.css" />
+  </head>
+  <body class="options">
+    <main>
+      <h1>OpenHoverZoom options</h1>
+      <form id="settings-form">
+        <label>
+          Hover delay (milliseconds)
+          <input id="hover-delay" type="number" min="100" max="1500" step="25" />
+        </label>
+        <label>
+          Maximum preview size (% of viewport)
+          <input id="preview-size" type="number" min="25" max="95" step="5" />
+        </label>
+        <label class="row">
+          <span>Preview same-size images</span>
+          <input id="same-size" type="checkbox" />
+        </label>
+        <button type="submit">Save</button>
+      </form>
+      <section>
+        <h2>Disabled sites</h2>
+        <p id="empty-sites">No sites are disabled.</p>
+        <ul id="disabled-sites"></ul>
+      </section>
+      <p id="status" role="status"></p>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

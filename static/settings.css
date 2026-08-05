@@ -1,0 +1,79 @@
+:root {
+  color-scheme: light dark;
+  font: 14px/1.45 system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  background: Canvas;
+  color: CanvasText;
+}
+
+main {
+  box-sizing: border-box;
+  padding: 16px;
+}
+
+.popup main {
+  width: 280px;
+}
+
+.options main {
+  max-width: 680px;
+  margin: 0 auto;
+}
+
+h1 {
+  margin: 0 0 16px;
+  font-size: 20px;
+}
+
+h2 {
+  margin-top: 28px;
+  font-size: 16px;
+}
+
+form,
+label:not(.row) {
+  display: grid;
+  gap: 12px;
+}
+
+label:not(.row) {
+  gap: 5px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 12px 0;
+}
+
+input[type="number"] {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 7px;
+}
+
+button {
+  padding: 8px 12px;
+}
+
+#site-toggle {
+  width: 100%;
+  margin: 4px 0 10px;
+}
+
+#status {
+  min-height: 1.45em;
+  color: GrayText;
+}
+
+li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 6px 0;
+}

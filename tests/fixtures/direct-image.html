@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenHoverZoom fixture gallery</title>
+    <style>
+      body { font: 16px/1.5 system-ui, sans-serif; margin: 2rem; }
+      .gallery { display: flex; flex-wrap: wrap; gap: 2rem; align-items: start; }
+      .thumbnail { width: 160px; height: 110px; object-fit: cover; }
+      .background { width: 160px; height: 110px; background: url("./full.svg") center/cover; }
+    </style>
+  </head>
+  <body>
+    <h1>Generic resolver fixtures</h1>
+    <div class="gallery">
+      <a href="./full.svg"><img class="thumbnail" src="./thumbnail.svg" alt="Linked image" /></a>
+      <img
+        class="thumbnail"
+        src="./thumbnail.svg"
+        srcset="./thumbnail.svg 320w, ./full.svg 1600w"
+        alt="Responsive image"
+      />
+      <div class="background" aria-label="CSS background image"></div>
+      <a href="./linked-document.html"><img class="thumbnail" src="./thumbnail.svg" alt="Linked metadata" /></a>
+    </div>
+  </body>
+</html>

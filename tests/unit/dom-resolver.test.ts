@@ -34,6 +34,25 @@ describe("DOM resolver", () => {
     expect(urls).toContain("http://localhost:3000/original.jpg");
   });
 
+  it("retains a rendered-size thumbnail only as a failure fallback", () => {
+    const image = document.createElement("img");
+    image.src = "/thumbnail.jpg";
+    image.srcset = "/large.jpg 1600w";
+    document.body.append(image);
+
+    const resolution = resolveDomTarget(image, { showSameSizeImages: false });
+
+    expect(resolution.candidates.map((candidate) => candidate.url)).not.toContain(
+      "http://localhost:3000/thumbnail.jpg",
+    );
+    expect(resolution.fallbackCandidates).toContainEqual(
+      expect.objectContaining({
+        url: "http://localhost:3000/thumbnail.jpg",
+        source: "image-src",
+      }),
+    );
+  });
+
   it("collects a CSS background URL", () => {
     const tile = document.createElement("div");
     tile.style.backgroundImage = 'url("/background.webp")';

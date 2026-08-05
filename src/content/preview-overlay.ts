@@ -114,7 +114,15 @@ export class PreviewOverlay {
     this.#prepared = this.#prepareMedia(candidate);
   }
 
-  show(candidate: MediaCandidate): void {
+  show(candidate: MediaCandidate, fallback: MediaCandidate | null = null): void {
+    const preparedKey = this.#prepared?.key;
+    if (
+      preparedKey &&
+      preparedKey !== mediaKey(candidate) &&
+      (!fallback || preparedKey !== mediaKey(fallback))
+    ) {
+      this.#discardPrepared();
+    }
     const suppliedGallery = candidate.gallery?.slice(0, MAX_GALLERY_ITEMS) ?? [];
     this.#gallery = suppliedGallery.length > 1
       ? suppliedGallery.map(stripGallery)
@@ -122,7 +130,7 @@ export class PreviewOverlay {
     this.#galleryIndex = clampIndex(candidate.galleryIndex ?? 0, this.#gallery.length);
     this.#requestedGalleryIndex = this.#galleryIndex;
     this.#gallery[this.#galleryIndex] = stripGallery(candidate);
-    this.#loadIndex(this.#galleryIndex);
+    this.#loadIndex(this.#galleryIndex, fallback);
   }
 
   navigateGallery(delta: -1 | 1): GallerySelection | null {
@@ -131,26 +139,36 @@ export class PreviewOverlay {
       (this.#requestedGalleryIndex + delta + this.#gallery.length) % this.#gallery.length;
     const candidate = this.#gallery[nextIndex];
     if (!candidate) return null;
-    this.#loadIndex(nextIndex);
+    if (candidate.linkedPageUrl && candidate.source !== "document-metadata") {
+      this.#requestedGalleryIndex = nextIndex;
+      this.#showGalleryLoading(candidate);
+    } else {
+      this.#loadIndex(nextIndex);
+    }
     return { index: nextIndex, candidate };
   }
 
-  upgradeGalleryItem(
+  resolveGallerySelection(
     selection: GallerySelection,
-    candidate: MediaCandidate,
+    candidate: MediaCandidate | null,
   ): boolean {
     const current = this.#gallery[selection.index];
     if (
       !current ||
       current.url !== selection.candidate.url ||
-      current.linkedPageUrl !== selection.candidate.linkedPageUrl ||
-      current.url === candidate.url
+      current.linkedPageUrl !== selection.candidate.linkedPageUrl
     ) {
       return false;
     }
-    this.#gallery[selection.index] = stripGallery(candidate);
+    const resolved = candidate && candidate.url !== current.url
+      ? stripGallery(candidate)
+      : current;
+    this.#gallery[selection.index] = resolved;
     if (this.#requestedGalleryIndex === selection.index) {
-      this.#loadIndex(selection.index);
+      this.#loadIndex(
+        selection.index,
+        resolved.url !== current.url ? current : null,
+      );
     }
     return true;
   }
@@ -199,7 +217,7 @@ export class PreviewOverlay {
     this.#panel.style.top = `${placement.top}px`;
   }
 
-  #loadIndex(index: number): void {
+  #loadIndex(index: number, fallback: MediaCandidate | null = null): void {
     const candidate = this.#gallery[index];
     if (!candidate) {
       this.hide();
@@ -232,6 +250,7 @@ export class PreviewOverlay {
       if (ready) {
         this.#galleryIndex = index;
         this.#requestedGalleryIndex = index;
+        this.#discardPrepared();
         this.#commitMedia(media, candidate);
         return;
       }
@@ -239,6 +258,11 @@ export class PreviewOverlay {
         kind: candidate.kind,
         source: candidate.source,
       });
+      if (fallback && fallback.url !== candidate.url) {
+        this.#gallery[index] = stripGallery(fallback);
+        this.#loadIndex(index);
+        return;
+      }
       if (hasVisibleMedia) {
         this.#requestedGalleryIndex = this.#galleryIndex;
         preloader.remove();
@@ -248,6 +272,20 @@ export class PreviewOverlay {
     const loader = this.#panel.querySelector<HTMLElement>(".loader");
     if (!hasVisibleMedia && loader) loader.setAttribute("aria-label", "Loading preview");
     requestAnimationFrame(() => this.reposition());
+  }
+
+  #showGalleryLoading(fallback: MediaCandidate): void {
+    this.#ensureConnected();
+    this.#renderSequence += 1;
+    this.#discardPrepared();
+    this.#currentCandidate = null;
+    this.#panel.style.removeProperty("width");
+    this.#panel.replaceChildren(this.#createLoader("Resolving preview"));
+    this.#panel.className = "panel loading";
+    this.#panel.hidden = false;
+    this.#applySizeLimit();
+    this.reposition();
+    this.prepare(fallback);
   }
 
   #commitMedia(media: HTMLElement, candidate: MediaCandidate): void {
@@ -320,10 +358,7 @@ export class PreviewOverlay {
   }
 
   #takePrepared(candidate: MediaCandidate): PreparedMedia | null {
-    if (this.#prepared?.key !== mediaKey(candidate)) {
-      this.#discardPrepared();
-      return null;
-    }
+    if (this.#prepared?.key !== mediaKey(candidate)) return null;
     const prepared = this.#prepared;
     this.#prepared = null;
     return prepared;

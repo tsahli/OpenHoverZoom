@@ -197,7 +197,8 @@ export class HoverController {
     if (
       !this.#activeTarget &&
       this.overlay.isVisible() &&
-      !this.overlay.hasVisibleMedia()
+      !this.overlay.hasVisibleMedia() &&
+      this.#resolvesSilently(target)
     ) this.overlay.hide();
     this.#pendingTarget = target;
     this.#pendingPoint = point;
@@ -229,7 +230,7 @@ export class HoverController {
     this.#cancelActiveRequest();
     this.#activeTarget = target;
     this.overlay.setAnchor(point.x, point.y);
-    if (!this.overlay.isVisible() && !this.#resolvesSilently(target)) {
+    if (!this.#resolvesSilently(target)) {
       this.overlay.showLoading();
     }
     void this.#resolve(target);
@@ -245,28 +246,23 @@ export class HoverController {
         { showSameSizeImages: this.#settings.showSameSizeImages },
         request.signal,
         {
-          onLocalCandidate: (localCandidate) => this.overlay.prepare(localCandidate),
+          onFallbackCandidate: (fallback) => this.overlay.prepare(fallback),
         },
       );
       if (this.#request !== request || request.signal.aborted) return;
       this.#clearLoadingTimer();
-      if (resolution.candidate) this.overlay.show(resolution.candidate);
+      if (resolution.candidate) {
+        if (resolution.fallback) {
+          this.overlay.show(resolution.candidate, resolution.fallback);
+        } else {
+          this.overlay.show(resolution.candidate);
+        }
+      }
       else {
         this.#activeTarget = null;
         this.#restoreNativeTitles();
         this.overlay.hide();
         return;
-      }
-
-      if (resolution.upgrade) {
-        const upgrade = await resolution.upgrade;
-        if (
-          upgrade &&
-          this.#request === request &&
-          !request.signal.aborted
-        ) {
-          this.overlay.show(upgrade);
-        }
       }
     } catch (error) {
       if (this.#request !== request || request.signal.aborted) return;
@@ -289,13 +285,16 @@ export class HoverController {
     this.#galleryRequest = request;
     void resolveGalleryCandidate(selection.candidate, request.signal)
       .then((candidate) => {
-        if (candidate && this.#galleryRequest === request && !request.signal.aborted) {
-          this.overlay.upgradeGalleryItem(selection, candidate);
+        if (this.#galleryRequest === request && !request.signal.aborted) {
+          this.overlay.resolveGallerySelection(selection, candidate);
         }
       })
       .catch((error: unknown) => {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
           console.warn("[OpenHoverZoom] Gallery item upgrade failed", error);
+          if (this.#galleryRequest === request && !request.signal.aborted) {
+            this.overlay.resolveGallerySelection(selection, null);
+          }
         }
       })
       .finally(() => {

@@ -37,7 +37,7 @@ describe("hover tracking", () => {
     mocks.requestImageDownload.mockResolvedValue(undefined);
     mocks.resolveTarget.mockImplementation(async (target: Element) => ({
       candidate: candidateFor(target),
-      upgrade: null,
+      fallback: null,
     }));
     overlay = new OverlayDouble();
     controller = new HoverController(
@@ -201,7 +201,7 @@ describe("hover tracking", () => {
         secondSignal = signal;
         return new Promise(() => undefined);
       }
-      return Promise.resolve({ candidate: candidateFor(target), upgrade: null });
+      return Promise.resolve({ candidate: candidateFor(target), fallback: null });
     });
 
     dispatchPointer(first, "pointerover", 100, 100);
@@ -227,7 +227,7 @@ describe("hover tracking", () => {
           finishFirst = resolve;
         });
       }
-      return Promise.resolve({ candidate: candidateFor(target), upgrade: null });
+      return Promise.resolve({ candidate: candidateFor(target), fallback: null });
     });
 
     dispatchPointer(first, "pointerover", 100, 100);
@@ -239,7 +239,7 @@ describe("hover tracking", () => {
       expect.objectContaining({ caption: "second" }),
     );
 
-    finishFirst?.({ candidate: candidateFor(first), upgrade: null });
+    finishFirst?.({ candidate: candidateFor(first), fallback: null });
     await Promise.resolve();
 
     expect(overlay.show).toHaveBeenCalledOnce();
@@ -249,7 +249,7 @@ describe("hover tracking", () => {
     const anchor = document.createElement("a");
     anchor.href = "https://cdn.example/file.jpg";
     document.body.append(anchor);
-    mocks.resolveTarget.mockResolvedValueOnce({ candidate: null, upgrade: null });
+    mocks.resolveTarget.mockResolvedValueOnce({ candidate: null, fallback: null });
 
     dispatchPointer(anchor, "pointerover", 100, 100);
     await vi.advanceTimersByTimeAsync(250);
@@ -274,35 +274,32 @@ describe("hover tracking", () => {
     );
   });
 
-  it("replaces a local preview when a better deferred candidate is ready", async () => {
+  it("keeps the spinner visible until the high-resolution candidate is resolved", async () => {
     const image = imageWithId("first");
-    let finishUpgrade: ((candidate: MediaCandidate) => void) | undefined;
-    mocks.resolveTarget.mockImplementation(async (target: Element) => {
-      const upgrade = new Promise<MediaCandidate>((resolve) => {
-        finishUpgrade = resolve;
-      });
-      return { candidate: candidateFor(target), upgrade };
-    });
-
-    dispatchPointer(image, "pointerover", 100, 100);
-    await vi.advanceTimersByTimeAsync(250);
-    expect(overlay.show).toHaveBeenCalledOnce();
-    expect(overlay.show).toHaveBeenLastCalledWith(
-      expect.objectContaining({ url: "https://cdn.example/first.jpg" }),
-    );
-
-    finishUpgrade?.({
+    const local = candidateFor(image);
+    const original: MediaCandidate = {
       url: "https://cdn.example/first-original.jpg",
       kind: "image",
       source: "document-metadata",
       confidence: 98,
-    });
+    };
+    let finishResolution: ((resolution: ResolvedTarget) => void) | undefined;
+    mocks.resolveTarget.mockImplementation(() =>
+      new Promise<ResolvedTarget>((resolve) => {
+        finishResolution = resolve;
+      }),
+    );
+
+    dispatchPointer(image, "pointerover", 100, 100);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(overlay.showLoading).toHaveBeenCalled();
+    expect(overlay.show).not.toHaveBeenCalled();
+
+    finishResolution?.({ candidate: original, fallback: local });
     await Promise.resolve();
 
-    expect(overlay.show).toHaveBeenCalledTimes(2);
-    expect(overlay.show).toHaveBeenLastCalledWith(
-      expect.objectContaining({ url: "https://cdn.example/first-original.jpg" }),
-    );
+    expect(overlay.show).toHaveBeenCalledOnce();
+    expect(overlay.show).toHaveBeenCalledWith(original, local);
   });
 
   it("upgrades a newly selected gallery item from its linked page", async () => {
@@ -334,7 +331,27 @@ describe("hover tracking", () => {
       thumbnail,
       expect.any(AbortSignal),
     );
-    expect(overlay.upgradeGalleryItem).toHaveBeenCalledWith(selection, original);
+    expect(overlay.resolveGallerySelection).toHaveBeenCalledWith(selection, original);
+  });
+
+  it("falls back to a gallery thumbnail when its linked page has no better image", async () => {
+    const thumbnail: MediaCandidate = {
+      url: "https://cdn.example/second-small.jpg",
+      kind: "image",
+      source: "srcset",
+      confidence: 90,
+      linkedPageUrl: "https://gallery.example/photos/second",
+    };
+    const selection = { index: 1, candidate: thumbnail };
+    overlay.visible = true;
+    overlay.mediaVisible = true;
+    overlay.navigateGallery.mockReturnValueOnce(selection);
+
+    dispatchKey("ArrowRight");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(overlay.resolveGallerySelection).toHaveBeenCalledWith(selection, null);
   });
 
   it("downloads the exact visible image only for the configured shortcut", async () => {
@@ -377,6 +394,7 @@ class OverlayDouble {
   prepare = vi.fn();
   showLoading = vi.fn(() => {
     this.visible = true;
+    this.mediaVisible = false;
   });
   show = vi.fn(() => {
     this.visible = true;
@@ -389,8 +407,8 @@ class OverlayDouble {
   isVisible = vi.fn(() => this.visible);
   hasVisibleMedia = vi.fn(() => this.mediaVisible);
   navigateGallery = vi.fn<(_delta: -1 | 1) => GallerySelection | null>(() => null);
-  upgradeGalleryItem = vi.fn<
-    (_selection: GallerySelection, _candidate: MediaCandidate) => boolean
+  resolveGallerySelection = vi.fn<
+    (_selection: GallerySelection, _candidate: MediaCandidate | null) => boolean
   >(() => false);
   getVisibleImageUrl = vi.fn(() =>
     this.mediaVisible ? "https://cdn.example/first.jpg" : null,

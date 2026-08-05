@@ -56,11 +56,17 @@ describe("target resolver", () => {
         url: "https://cdn.example/original.jpg",
         source: "document-metadata",
       },
-      upgrade: null,
+      fallback: null,
     });
   });
 
   it("uses a high-confidence DOM media candidate without an HTML request", async () => {
+    const fallback: MediaCandidate = {
+      url: "https://cdn.example/thumbnail.jpg",
+      kind: "image",
+      source: "current-src",
+      confidence: 62,
+    };
     mocks.resolveDomTarget.mockReturnValue({
       candidates: [
         {
@@ -69,24 +75,28 @@ describe("target resolver", () => {
           source: "srcset",
           confidence: 90,
         },
+        fallback,
       ],
       anchorUrl: "https://gallery.example/item/123",
     });
+    const onFallbackCandidate = vi.fn();
 
     const result = await resolveTarget(
       document.createElement("img"),
       { showSameSizeImages: false },
       new AbortController().signal,
+      { onFallbackCandidate },
     );
 
     expect(mocks.resolveLinkedDocument).not.toHaveBeenCalled();
+    expect(onFallbackCandidate).toHaveBeenCalledWith(fallback);
     expect(result).toMatchObject({
       candidate: { url: "https://cdn.example/large.jpg", source: "srcset" },
-      upgrade: null,
+      fallback,
     });
   });
 
-  it("uses linked metadata that resolves within the local fallback budget", async () => {
+  it("uses linked metadata and retains the local candidate only as a failure fallback", async () => {
     const local: MediaCandidate = {
       url: "https://cdn.example/thumbnail.jpg",
       kind: "image",
@@ -105,22 +115,22 @@ describe("target resolver", () => {
         confidence: 98,
       },
     ]);
-    const onLocalCandidate = vi.fn();
+    const onFallbackCandidate = vi.fn();
 
     const result = await resolveTarget(
       document.createElement("img"),
       { showSameSizeImages: false },
       new AbortController().signal,
-      { metadataBudgetMs: 75, onLocalCandidate },
+      { onFallbackCandidate },
     );
 
-    expect(onLocalCandidate).toHaveBeenCalledWith(local);
+    expect(onFallbackCandidate).toHaveBeenCalledWith(local);
     expect(result).toMatchObject({
       candidate: {
         url: "https://cdn.example/original.jpg",
         source: "document-metadata",
       },
-      upgrade: null,
+      fallback: local,
     });
   });
 
@@ -190,8 +200,7 @@ describe("target resolver", () => {
     });
   });
 
-  it("returns the local candidate, then offers a better late metadata result", async () => {
-    vi.useFakeTimers();
+  it("waits for slow metadata instead of returning a provisional local candidate", async () => {
     const local: MediaCandidate = {
       url: "https://cdn.example/thumbnail.jpg",
       kind: "image",
@@ -208,27 +217,21 @@ describe("target resolver", () => {
         finishMetadata = resolve;
       }),
     );
-    const onLocalCandidate = vi.fn();
+    const onFallbackCandidate = vi.fn();
     const resultPromise = resolveTarget(
       document.createElement("img"),
       { showSameSizeImages: false },
       new AbortController().signal,
-      { metadataBudgetMs: 75, onLocalCandidate },
+      { onFallbackCandidate },
     );
 
-    expect(onLocalCandidate).toHaveBeenCalledWith(local);
-    await vi.advanceTimersByTimeAsync(74);
+    expect(onFallbackCandidate).toHaveBeenCalledWith(local);
     let settled = false;
     void resultPromise.then(() => {
       settled = true;
     });
     await Promise.resolve();
     expect(settled).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(1);
-    const result = await resultPromise;
-    expect(result.candidate).toEqual(local);
-    expect(result.upgrade).not.toBeNull();
 
     const original: MediaCandidate = {
       url: "https://cdn.example/original.jpg",
@@ -237,11 +240,13 @@ describe("target resolver", () => {
       confidence: 98,
     };
     finishMetadata?.([original]);
-    await expect(result.upgrade).resolves.toMatchObject(original);
+    await expect(resultPromise).resolves.toEqual({
+      candidate: original,
+      fallback: local,
+    });
   });
 
-  it("cancels a bounded metadata wait immediately when the hover is abandoned", async () => {
-    vi.useFakeTimers();
+  it("cancels metadata resolution when the hover is abandoned", async () => {
     const local: MediaCandidate = {
       url: "https://cdn.example/thumbnail.jpg",
       kind: "image",
@@ -252,14 +257,20 @@ describe("target resolver", () => {
       candidates: [local],
       anchorUrl: "https://gallery.example/item/slow",
     });
-    mocks.resolveLinkedDocument.mockReturnValue(new Promise<MediaCandidate[]>(() => undefined));
+    mocks.resolveLinkedDocument.mockImplementation((_url: string, signal: AbortSignal) =>
+      new Promise<MediaCandidate[]>((_resolve, reject) => {
+        signal.addEventListener(
+          "abort",
+          () => reject(new DOMException("Aborted", "AbortError")),
+          { once: true },
+        );
+      }));
     const controller = new AbortController();
 
     const resultPromise = resolveTarget(
       document.createElement("img"),
       { showSameSizeImages: false },
       controller.signal,
-      { metadataBudgetMs: 5_000 },
     );
     controller.abort();
 

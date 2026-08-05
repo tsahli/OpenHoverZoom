@@ -8,17 +8,13 @@ export interface ResolverOptions {
 }
 
 export interface ResolverHooks {
-  onLocalCandidate?: (candidate: MediaCandidate) => void;
-  metadataBudgetMs?: number;
+  onFallbackCandidate?: (candidate: MediaCandidate) => void;
 }
 
 export interface ResolvedTarget {
   candidate: MediaCandidate | null;
-  upgrade: Promise<MediaCandidate | null> | null;
+  fallback: MediaCandidate | null;
 }
-
-const DEFAULT_METADATA_BUDGET_MILLISECONDS = 180;
-const METADATA_TIMEOUT = Symbol("metadata-timeout");
 
 export async function resolveTarget(
   target: Element,
@@ -29,35 +25,31 @@ export async function resolveTarget(
   signal.throwIfAborted();
   const resolution = resolveDomTarget(target, options);
   const direct = resolution.candidates[0];
-  const local = resolution.candidates.find((candidate) => candidate.source !== "direct-link");
-  if (local) hooks.onLocalCandidate?.(attachGallery(local, resolution));
+  const localCandidates = resolution.fallbackCandidates ?? resolution.candidates.filter(
+    (candidate) => candidate.source !== "direct-link",
+  );
+  const local = localCandidates[0];
   if (direct && direct.confidence >= 90 && direct.source !== "direct-link") {
-    return { candidate: attachGallery(direct, resolution), upgrade: null };
+    const candidate = attachGallery(direct, resolution);
+    const fallback = localCandidates.find((item) => item.url !== candidate.url);
+    const fallbackCandidate = fallback ? attachGallery(fallback, resolution) : null;
+    if (fallbackCandidate) hooks.onFallbackCandidate?.(fallbackCandidate);
+    return { candidate, fallback: fallbackCandidate };
   }
 
-  const linkedPromise = resolution.anchorUrl
-    ? resolveLinkedDocument(resolution.anchorUrl, signal)
-    : Promise.resolve([]);
-  const linked = local && resolution.anchorUrl
-    ? await resolveWithinBudget(
-        linkedPromise,
-        hooks.metadataBudgetMs ?? DEFAULT_METADATA_BUDGET_MILLISECONDS,
-        signal,
-      )
-    : await linkedPromise;
+  const localCandidate = local ? attachGallery(local, resolution) : null;
+  if (localCandidate) hooks.onFallbackCandidate?.(localCandidate);
+  const linked = resolution.anchorUrl
+    ? await resolveLinkedDocument(resolution.anchorUrl, signal)
+    : [];
   signal.throwIfAborted();
-  if (linked === METADATA_TIMEOUT) {
-    const initial = attachGallery(local!, resolution);
-    const upgrade = linkedPromise.then((lateLinked) => {
-      signal.throwIfAborted();
-      const upgraded = selectBestCandidate(lateLinked, resolution, options);
-      return upgraded && upgraded.url !== initial.url ? upgraded : null;
-    });
-    return { candidate: initial, upgrade };
-  }
+  const candidate = selectBestCandidate(linked, resolution, options);
   return {
-    candidate: selectBestCandidate(linked, resolution, options),
-    upgrade: null,
+    candidate,
+    fallback:
+      candidate && localCandidate && candidate.url !== localCandidate.url
+        ? localCandidate
+        : null,
   };
 }
 
@@ -98,31 +90,6 @@ function selectBestCandidate(
   });
   const selected = ranked[0];
   return selected ? attachGallery(selected, resolution) : null;
-}
-
-async function resolveWithinBudget(
-  linked: Promise<MediaCandidate[]>,
-  budgetMilliseconds: number,
-  signal: AbortSignal,
-): Promise<MediaCandidate[] | typeof METADATA_TIMEOUT> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let onAbort: (() => void) | undefined;
-  const timeout = new Promise<typeof METADATA_TIMEOUT>((resolve) => {
-    timer = setTimeout(() => resolve(METADATA_TIMEOUT), Math.max(0, budgetMilliseconds));
-  });
-  const aborted = new Promise<never>((_resolve, reject) => {
-    onAbort = () => reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
-    signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) onAbort();
-  });
-  try {
-    const result = await Promise.race([linked, timeout, aborted]);
-    signal.throwIfAborted();
-    return result;
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-    if (onAbort) signal.removeEventListener("abort", onAbort);
-  }
 }
 
 function attachGallery(candidate: MediaCandidate, resolution: DomResolution): MediaCandidate {

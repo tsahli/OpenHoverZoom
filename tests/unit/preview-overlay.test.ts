@@ -93,31 +93,82 @@ describe("preview overlay", () => {
     const selection = overlay.navigateGallery(1);
     expect(selection).toMatchObject({ index: 1, candidate: second });
     panel = previewPanel();
-    expect(panel.querySelector(".metadata")?.textContent).toContain("First caption");
+    expect(panel.classList.contains("loading")).toBe(true);
+    expect(panel.querySelector(".media-frame")).toBeNull();
+
+    if (!selection) throw new Error("Expected a gallery selection");
+    expect(overlay.resolveGallerySelection(selection, secondOriginal)).toBe(true);
+    panel = previewPanel();
+    expect(panel.querySelector<HTMLImageElement>(".preload-bin img")?.src).toBe(
+      "https://cdn.example/second-original.jpg",
+    );
     panel.querySelector(".preload-bin img")?.dispatchEvent(new Event("load"));
     await Promise.resolve();
     panel = previewPanel();
     expect(panel.querySelector("img")?.getAttribute("src")).toBe(
-      "https://cdn.example/second.jpg",
+      "https://cdn.example/second-original.jpg",
     );
     expect(panel.querySelector(".metadata")?.textContent).toContain("Second caption");
     expect(panel.querySelector(".gallery-status")?.textContent).toContain("2 / 2");
-
-    if (!selection) throw new Error("Expected a gallery selection");
-    expect(overlay.upgradeGalleryItem(selection, secondOriginal)).toBe(true);
-    expect(previewPanel().querySelector(".media-frame img")?.getAttribute("src")).toBe(
-      "https://cdn.example/second.jpg",
-    );
-    previewPanel().querySelector(".preload-bin img")?.dispatchEvent(new Event("load"));
-    await Promise.resolve();
-    expect(previewPanel().querySelector(".media-frame img")?.getAttribute("src")).toBe(
-      "https://cdn.example/second-original.jpg",
-    );
 
     expect(overlay.navigateGallery(1)).toMatchObject({ index: 0, candidate: first });
     previewPanel().querySelector(".preload-bin img")?.dispatchEvent(new Event("load"));
     await Promise.resolve();
     expect(previewPanel().querySelector(".gallery-status")?.textContent).toContain("1 / 2");
+  });
+
+  it("reveals a prepared local image only when the selected image fails", async () => {
+    const local = imageCandidate("local", "Local caption");
+    const original = imageCandidate("original", "Original caption");
+    const createElement = vi.spyOn(document, "createElement");
+    const overlay = new PreviewOverlay(85);
+
+    overlay.prepare(local);
+    overlay.showLoading();
+    overlay.show(original, local);
+
+    const createdImages = createElement.mock.results
+      .map((result) => result.value)
+      .filter((element): element is HTMLImageElement => element instanceof HTMLImageElement);
+    const localImage = createdImages.find((image) => image.src.endsWith("/local.jpg"));
+    const originalImage = createdImages.find((image) => image.src.endsWith("/original.jpg"));
+    localImage?.dispatchEvent(new Event("load"));
+    originalImage?.dispatchEvent(new Event("error"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(previewPanel().querySelector<HTMLImageElement>(".media-frame img")?.src).toBe(
+      "https://cdn.example/local.jpg",
+    );
+    expect(previewPanel().textContent).toContain("Local caption");
+  });
+
+  it("keeps a prepared local image hidden when the selected image succeeds", async () => {
+    const local = imageCandidate("local", "Local caption");
+    const original = imageCandidate("original", "Original caption");
+    const createElement = vi.spyOn(document, "createElement");
+    const overlay = new PreviewOverlay(85);
+
+    overlay.prepare(local);
+    overlay.showLoading();
+    overlay.show(original, local);
+
+    const createdImages = createElement.mock.results
+      .map((result) => result.value)
+      .filter((element): element is HTMLImageElement => element instanceof HTMLImageElement);
+    const localImage = createdImages.find((image) => image.src.endsWith("/local.jpg"));
+    const originalImage = createdImages.find((image) => image.src.endsWith("/original.jpg"));
+    localImage?.dispatchEvent(new Event("load"));
+    await Promise.resolve();
+    expect(previewPanel().classList.contains("loading")).toBe(true);
+    expect(previewPanel().querySelector(".media-frame")).toBeNull();
+
+    originalImage?.dispatchEvent(new Event("load"));
+    await Promise.resolve();
+    expect(previewPanel().querySelector<HTMLImageElement>(".media-frame img")?.src).toBe(
+      "https://cdn.example/original.jpg",
+    );
+    expect(previewPanel().textContent).not.toContain("Local caption");
   });
 
   it("exposes the committed image URL and updates its shortcut hint", async () => {

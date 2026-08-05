@@ -24,6 +24,7 @@ const MIN_COVERING_LINK_OVERLAP = 0.75;
 
 export interface DomResolution {
   candidates: MediaCandidate[];
+  fallbackCandidates: MediaCandidate[];
   anchorUrl: string | null;
   renderedSize?: RenderedSize;
   gallery?: DiscoveredGallery;
@@ -116,9 +117,14 @@ export function resolveDomTarget(
     showSameSizeImages: options.showSameSizeImages,
     ...(renderedSize ? { renderedSize } : {}),
   };
+  const allCandidates = [...rewritten, ...candidates];
 
   return {
-    candidates: rankCandidates([...rewritten, ...candidates], rankOptions),
+    candidates: rankCandidates(allCandidates, rankOptions),
+    fallbackCandidates: rankCandidates(allCandidates, {
+      ...rankOptions,
+      showSameSizeImages: true,
+    }).filter((candidate) => candidate.source !== "direct-link"),
     anchorUrl,
     ...(renderedSize ? { renderedSize } : {}),
     ...(gallery ? { gallery } : {}),

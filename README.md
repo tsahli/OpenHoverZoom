@@ -8,6 +8,8 @@ when a gallery is available, use the arrow keys to move through it. Press Enter
 while previewing an image to save it to your Downloads folder. You can change
 the download shortcut from the extension's options.
 
+![OpenHoverZoom previewing a Wikimedia Commons gallery](docs/screenshot.png)
+
 ## Why OpenHoverZoom?
 
 OpenHoverZoom is built from scratch to be open, understandable, and cautious:

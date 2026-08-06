@@ -1,4 +1,4 @@
-import { extractBackgroundImageUrls } from "./background-image";
+import { extractPreviewableBackgroundImageUrls } from "./background-image";
 import type { MediaCandidate, RenderedSize } from "./candidate";
 import { discoverDomGallery, type DiscoveredGallery } from "./dom-gallery";
 import { mediaKindFromUrl } from "./media-type";
@@ -322,10 +322,7 @@ function addBackgroundCandidates(
   baseUrl: string,
   caption: string | undefined,
 ): void {
-  const view = element.ownerDocument.defaultView;
-  if (!view) return;
-  const backgroundImage = view.getComputedStyle(element).backgroundImage;
-  for (const url of extractBackgroundImageUrls(backgroundImage)) {
+  for (const url of extractPreviewableBackgroundImageUrls(element)) {
     addCandidate(candidates, url, baseUrl, {
       kind: "image",
       source: "background-image",

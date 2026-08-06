@@ -56,11 +56,47 @@ describe("DOM resolver", () => {
   it("collects a CSS background URL", () => {
     const tile = document.createElement("div");
     tile.style.backgroundImage = 'url("/background.webp")';
+    tile.style.backgroundRepeat = "no-repeat";
     document.body.append(tile);
     expect(resolveDomTarget(tile, { showSameSizeImages: false }).candidates[0]).toMatchObject({
       url: "http://localhost:3000/background.webp",
       source: "background-image",
     });
+  });
+
+  it("does not collect a repeating decorative background", () => {
+    const surface = document.createElement("div");
+    surface.style.backgroundImage = 'url("/brand-pattern.png")';
+    surface.style.backgroundRepeat = "repeat";
+    document.body.append(surface);
+
+    expect(resolveDomTarget(surface, { showSameSizeImages: false }).candidates).toEqual([]);
+  });
+
+  it("does not collect a page-scale decorative background", () => {
+    const surface = document.createElement("div");
+    surface.style.backgroundImage = 'url("/brand-backdrop.png")';
+    surface.style.backgroundRepeat = "no-repeat";
+    surface.getBoundingClientRect = () => rectangle(0, 0, 1024, 500);
+    document.body.append(surface);
+
+    expect(resolveDomTarget(surface, { showSameSizeImages: false }).candidates).toEqual([]);
+  });
+
+  it("keeps a page-scale background with explicit image semantics", () => {
+    const image = document.createElement("div");
+    image.setAttribute("role", "img");
+    image.style.backgroundImage = 'url("/wide-photo.jpg")';
+    image.style.backgroundRepeat = "no-repeat";
+    image.getBoundingClientRect = () => rectangle(0, 0, 1024, 500);
+    document.body.append(image);
+
+    expect(resolveDomTarget(image, { showSameSizeImages: false }).candidates).toContainEqual(
+      expect.objectContaining({
+        url: "http://localhost:3000/wide-photo.jpg",
+        source: "background-image",
+      }),
+    );
   });
 
   it("collects media nested inside a linked gallery wrapper", () => {

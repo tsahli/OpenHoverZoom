@@ -209,6 +209,31 @@ describe("hover target inspection", () => {
     expect(findHoverTarget(lazyImage, { x: 100, y: 100 })).toBe(lazyImage);
   });
 
+  it("recognizes a non-repeating CSS background thumbnail", () => {
+    const thumbnail = document.createElement("div");
+    thumbnail.style.backgroundImage = 'url("/photo.jpg")';
+    thumbnail.style.backgroundRepeat = "no-repeat";
+    document.body.append(thumbnail);
+
+    expect(findHoverTarget(thumbnail, { x: 100, y: 100 })).toBe(thumbnail);
+  });
+
+  it("ignores a repeating CSS background pattern", () => {
+    const backdrop = document.createElement("div");
+    backdrop.style.backgroundImage = 'url("/brand-pattern.png")';
+    backdrop.style.backgroundRepeat = "repeat";
+    document.body.append(backdrop);
+
+    expect(findHoverTarget(backdrop, { x: 100, y: 100 })).toBeNull();
+  });
+
+  it("ignores a background applied to the page root", () => {
+    document.body.style.backgroundImage = 'url("/brand-pattern.png")';
+    document.body.style.backgroundRepeat = "no-repeat";
+
+    expect(findHoverTarget(document.body, { x: 100, y: 100 })).toBeNull();
+  });
+
   it("recognizes an obvious direct media link", () => {
     const anchor = document.createElement("a");
     anchor.href = "https://cdn.example.test/photo.jpg";

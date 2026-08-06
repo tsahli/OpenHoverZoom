@@ -1,4 +1,4 @@
-import { extractBackgroundImageUrls } from "../resolver/background-image";
+import { extractPreviewableBackgroundImageUrls } from "../resolver/background-image";
 import { LAZY_SOURCE_ATTRIBUTES } from "../resolver/dom-resolver";
 import { mediaKindFromUrl } from "../resolver/media-type";
 import {
@@ -279,9 +279,7 @@ function isSourceCandidate(element: Element): boolean {
   ) {
     return true;
   }
-  const view = element.ownerDocument.defaultView;
-  if (!view) return false;
-  return extractBackgroundImageUrls(view.getComputedStyle(element).backgroundImage).length > 0;
+  return extractPreviewableBackgroundImageUrls(element).length > 0;
 }
 
 function isSupportedMediaLink(anchor: HTMLAnchorElement): boolean {

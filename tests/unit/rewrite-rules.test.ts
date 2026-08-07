@@ -29,6 +29,7 @@ describe("declarative rewrites", () => {
         url: "https://media.example/thumb/photo-original.jpg",
         source: "rewrite-rule",
         confidence: 70,
+        quality: "original",
       },
     ]);
   });

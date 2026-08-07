@@ -1,5 +1,6 @@
 import type { CandidateSource, MediaCandidate } from "./candidate";
 import { mediaKindFromUrl } from "./media-type";
+import { rankCandidates } from "./score-candidates";
 import { selectLargestSrcset, type SrcsetCandidate } from "./srcset";
 import { normalizeUrl } from "./url";
 
@@ -8,6 +9,7 @@ const MAX_GALLERY_DEPTH = 6;
 const MAX_INSPECTED_NODES = 640;
 const MAX_GALLERY_ITEMS = 64;
 const MAX_CAPTION_LENGTH = 500;
+const LAZY_SRCSET_ATTRIBUTES = ["data-srcset", "data-lazy-srcset"] as const;
 const GALLERY_SEMANTICS = /(?:^|[-_\s])(album|carousel|gallery|grid|media-list|photos?|slider|slideshow)(?:$|[-_\s])/iu;
 
 export interface DiscoveredGallery {
@@ -132,13 +134,22 @@ function candidateForImage(
   lazyAttributes: readonly string[],
 ): MediaCandidate | null {
   const caption = captionForImage(image);
+  const candidates: MediaCandidate[] = [];
   const picture = image.closest("picture");
   if (picture?.contains(image)) {
     const largest = largestPictureSource(picture);
     const candidate = largest
-      ? createCandidate(largest.url, baseUrl, "picture", 94, caption, largest.width)
+      ? createCandidate(
+          largest.url,
+          baseUrl,
+          "picture",
+          94,
+          caption,
+          largest.width,
+          "responsive",
+        )
       : null;
-    if (candidate) return candidate;
+    if (candidate) candidates.push(candidate);
   }
 
   const responsive = selectLargestSrcset(image.srcset);
@@ -150,8 +161,24 @@ function candidateForImage(
       90,
       caption,
       responsive.width,
+      "responsive",
     );
-    if (candidate) return candidate;
+    if (candidate) candidates.push(candidate);
+  }
+
+  for (const attribute of LAZY_SRCSET_ATTRIBUTES) {
+    const lazyResponsive = selectLargestSrcset(image.getAttribute(attribute) ?? "");
+    if (!lazyResponsive) continue;
+    const candidate = createCandidate(
+      lazyResponsive.url,
+      baseUrl,
+      "srcset",
+      90,
+      caption,
+      lazyResponsive.width,
+      "responsive",
+    );
+    if (candidate) candidates.push(candidate);
   }
 
   const prioritizedLazyAttributes = [...lazyAttributes].sort(
@@ -160,8 +187,19 @@ function candidateForImage(
   for (const attribute of prioritizedLazyAttributes) {
     const value = image.getAttribute(attribute);
     if (!value) continue;
-    const candidate = createCandidate(value, baseUrl, "data-attribute", 86, caption);
-    if (candidate) return candidate;
+    const quality = attribute.includes("full") || attribute === "data-original"
+      ? "original"
+      : "display";
+    const candidate = createCandidate(
+      value,
+      baseUrl,
+      "data-attribute",
+      86,
+      caption,
+      undefined,
+      quality,
+    );
+    if (candidate) candidates.push(candidate);
   }
 
   const dimensions = image.naturalWidth > 0 && image.naturalHeight > 0
@@ -170,16 +208,17 @@ function candidateForImage(
   const url = normalizeUrl(image.currentSrc || image.getAttribute("src") || "", baseUrl, {
     allowPageLocal: true,
   });
-  return url
-    ? {
-        url,
-        kind: "image",
-        source: "current-src",
-        confidence: 70,
-        ...dimensions,
-        ...(caption ? { caption } : {}),
-      }
-    : null;
+  if (url) {
+    candidates.push({
+      url,
+      kind: "image",
+      source: "current-src",
+      confidence: 70,
+      ...dimensions,
+      ...(caption ? { caption } : {}),
+    });
+  }
+  return rankCandidates(candidates, { showSameSizeImages: true })[0] ?? null;
 }
 
 function largestPictureSource(picture: HTMLPictureElement): SrcsetCandidate | null {
@@ -200,6 +239,7 @@ function createCandidate(
   confidence: number,
   caption: string | undefined,
   width?: number,
+  quality?: MediaCandidate["quality"],
 ): MediaCandidate | null {
   const url = normalizeUrl(value, baseUrl, { allowPageLocal: true });
   if (!url) return null;
@@ -209,6 +249,7 @@ function createCandidate(
     source,
     confidence,
     ...(width ? { width } : {}),
+    ...(quality ? { quality } : {}),
     ...(caption ? { caption } : {}),
   };
 }

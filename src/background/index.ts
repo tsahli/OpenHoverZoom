@@ -18,9 +18,10 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
       sendResponse({ accepted: false });
       return false;
     }
+    const filename = createDownloadFilename(url);
     void chrome.downloads.download({
       url: url.href,
-      filename: createDownloadFilename(),
+      ...(filename ? { filename } : {}),
       conflictAction: "uniquify",
       saveAs: false,
     }).catch((error: unknown) => {

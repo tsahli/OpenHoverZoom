@@ -5,11 +5,13 @@ import { DEFAULT_SETTINGS } from "../../src/shared/settings";
 
 const mocks = vi.hoisted(() => ({
   requestImageDownload: vi.fn(),
+  resolveDownloadCandidate: vi.fn(),
   resolveGalleryCandidate: vi.fn(),
   resolveTarget: vi.fn(),
 }));
 
 vi.mock("../../src/resolver", () => ({
+  resolveDownloadCandidate: mocks.resolveDownloadCandidate,
   resolveGalleryCandidate: mocks.resolveGalleryCandidate,
   resolveTarget: mocks.resolveTarget,
 }));
@@ -33,6 +35,8 @@ describe("hover tracking", () => {
     mocks.resolveTarget.mockReset();
     mocks.resolveGalleryCandidate.mockReset();
     mocks.resolveGalleryCandidate.mockResolvedValue(null);
+    mocks.resolveDownloadCandidate.mockReset();
+    mocks.resolveDownloadCandidate.mockResolvedValue(null);
     mocks.requestImageDownload.mockReset();
     mocks.requestImageDownload.mockResolvedValue(undefined);
     mocks.resolveTarget.mockImplementation(async (target: Element) => ({
@@ -382,6 +386,37 @@ describe("hover tracking", () => {
       "https://cdn.example/first.jpg",
     );
   });
+
+  it("resolves an explicit original only when the download shortcut is pressed", async () => {
+    const preview: MediaCandidate = {
+      url: "https://cdn.example/preview.jpg",
+      kind: "image",
+      source: "srcset",
+      confidence: 90,
+      linkedPageUrl: "https://gallery.example/photo/1",
+    };
+    const original: MediaCandidate = {
+      url: "https://cdn.example/original.jpg",
+      kind: "image",
+      source: "document-original-link",
+      confidence: 99,
+      quality: "original",
+    };
+    overlay.visible = true;
+    overlay.mediaVisible = true;
+    overlay.getVisibleImageCandidate.mockReturnValue(preview);
+    mocks.resolveDownloadCandidate.mockResolvedValue(original);
+
+    dispatchKey("Enter");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mocks.resolveDownloadCandidate).toHaveBeenCalledWith(
+      preview,
+      expect.any(AbortSignal),
+    );
+    expect(mocks.requestImageDownload).toHaveBeenCalledWith(original.url);
+  });
 });
 
 class OverlayDouble {
@@ -410,8 +445,15 @@ class OverlayDouble {
   resolveGallerySelection = vi.fn<
     (_selection: GallerySelection, _candidate: MediaCandidate | null) => boolean
   >(() => false);
-  getVisibleImageUrl = vi.fn(() =>
-    this.mediaVisible ? "https://cdn.example/first.jpg" : null,
+  getVisibleImageCandidate = vi.fn<() => MediaCandidate | null>(() =>
+    this.mediaVisible
+      ? {
+          url: "https://cdn.example/first.jpg",
+          kind: "image" as const,
+          source: "current-src" as const,
+          confidence: 62,
+        }
+      : null,
   );
 }
 

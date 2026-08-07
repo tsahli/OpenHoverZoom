@@ -51,6 +51,7 @@ export function applyRewriteRules(
           url: normalized,
           source: "rewrite-rule" as const,
           confidence: Math.min(100, candidate.confidence + (rule.priority ?? 5)),
+          quality: "original" as const,
         },
       ];
     });

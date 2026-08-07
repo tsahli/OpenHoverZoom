@@ -14,7 +14,11 @@ vi.mock("../../src/resolver/linked-document-resolver", () => ({
   resolveLinkedDocument: mocks.resolveLinkedDocument,
 }));
 
-import { resolveGalleryCandidate, resolveTarget } from "../../src/resolver";
+import {
+  resolveDownloadCandidate,
+  resolveGalleryCandidate,
+  resolveTarget,
+} from "../../src/resolver";
 
 describe("target resolver", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -28,6 +32,7 @@ describe("target resolver", () => {
           kind: "image",
           source: "direct-link",
           confidence: 92,
+          quality: "display",
         },
       ],
       anchorUrl: "https://gallery.example/item/photo.jpg",
@@ -60,7 +65,13 @@ describe("target resolver", () => {
     });
   });
 
-  it("uses a high-confidence DOM media candidate without an HTML request", async () => {
+  it("uses a high-confidence local image without fetching an unrelated detail page", async () => {
+    const responsive: MediaCandidate = {
+      url: "https://cdn.example/large.jpg",
+      kind: "image",
+      source: "srcset",
+      confidence: 90,
+    };
     const fallback: MediaCandidate = {
       url: "https://cdn.example/thumbnail.jpg",
       kind: "image",
@@ -68,15 +79,7 @@ describe("target resolver", () => {
       confidence: 62,
     };
     mocks.resolveDomTarget.mockReturnValue({
-      candidates: [
-        {
-          url: "https://cdn.example/large.jpg",
-          kind: "image",
-          source: "srcset",
-          confidence: 90,
-        },
-        fallback,
-      ],
+      candidates: [responsive, fallback],
       anchorUrl: "https://gallery.example/item/123",
     });
     const onFallbackCandidate = vi.fn();
@@ -91,7 +94,11 @@ describe("target resolver", () => {
     expect(mocks.resolveLinkedDocument).not.toHaveBeenCalled();
     expect(onFallbackCandidate).toHaveBeenCalledWith(fallback);
     expect(result).toMatchObject({
-      candidate: { url: "https://cdn.example/large.jpg", source: "srcset" },
+      candidate: {
+        url: "https://cdn.example/large.jpg",
+        source: "srcset",
+        linkedPageUrl: "https://gallery.example/item/123",
+      },
       fallback,
     });
   });
@@ -132,6 +139,38 @@ describe("target resolver", () => {
       },
       fallback: local,
     });
+  });
+
+  it("prefers an explicitly identified linked original when local evidence is inconclusive", async () => {
+    const responsive: MediaCandidate = {
+      url: "https://cdn.example/large.jpg",
+      kind: "image",
+      source: "data-attribute",
+      confidence: 88,
+      quality: "responsive",
+      width: 2400,
+    };
+    const original: MediaCandidate = {
+      url: "https://cdn.example/original.avif",
+      kind: "image",
+      source: "document-metadata",
+      confidence: 92,
+      quality: "original",
+    };
+    mocks.resolveDomTarget.mockReturnValue({
+      candidates: [responsive],
+      fallbackCandidates: [responsive],
+      anchorUrl: "https://gallery.example/item/quality",
+    });
+    mocks.resolveLinkedDocument.mockResolvedValue([original]);
+
+    const result = await resolveTarget(
+      document.createElement("img"),
+      { showSameSizeImages: false },
+      new AbortController().signal,
+    );
+
+    expect(result).toEqual({ candidate: original, fallback: responsive });
   });
 
   it("attaches the selected candidate at its ordered gallery position", async () => {
@@ -198,6 +237,40 @@ describe("target resolver", () => {
       caption: "Gallery caption",
       linkedPageUrl: "https://gallery.example/photos/123",
     });
+  });
+
+  it("uses only a semantically explicit original for an on-demand download", async () => {
+    const preview: MediaCandidate = {
+      url: "https://cdn.example/preview.jpg",
+      kind: "image",
+      source: "srcset",
+      confidence: 90,
+      linkedPageUrl: "https://gallery.example/photos/123",
+    };
+    const unrelatedHero: MediaCandidate = {
+      url: "https://cdn.example/article-hero.jpg",
+      kind: "image",
+      source: "document-metadata",
+      confidence: 98,
+      quality: "original",
+    };
+    const explicitOriginal: MediaCandidate = {
+      url: "https://cdn.example/original.jpg",
+      kind: "image",
+      source: "document-original-link",
+      confidence: 99,
+      quality: "original",
+    };
+    mocks.resolveLinkedDocument.mockResolvedValue([unrelatedHero, explicitOriginal]);
+
+    await expect(
+      resolveDownloadCandidate(preview, new AbortController().signal),
+    ).resolves.toBe(explicitOriginal);
+
+    mocks.resolveLinkedDocument.mockResolvedValue([unrelatedHero]);
+    await expect(
+      resolveDownloadCandidate(preview, new AbortController().signal),
+    ).resolves.toBeNull();
   });
 
   it("waits for slow metadata instead of returning a provisional local candidate", async () => {

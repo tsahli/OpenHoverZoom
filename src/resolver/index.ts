@@ -29,8 +29,12 @@ export async function resolveTarget(
     (candidate) => candidate.source !== "direct-link",
   );
   const local = localCandidates[0];
-  if (direct && direct.confidence >= 90 && direct.source !== "direct-link") {
-    const candidate = attachGallery(direct, resolution);
+  if (
+    direct &&
+    direct.confidence >= 90 &&
+    direct.source !== "direct-link"
+  ) {
+    const candidate = attachGallery(attachLinkedPage(direct, resolution), resolution);
     const fallback = localCandidates.find((item) => item.url !== candidate.url);
     const fallbackCandidate = fallback ? attachGallery(fallback, resolution) : null;
     if (fallbackCandidate) hooks.onFallbackCandidate?.(fallbackCandidate);
@@ -44,12 +48,12 @@ export async function resolveTarget(
     : [];
   signal.throwIfAborted();
   const candidate = selectBestCandidate(linked, resolution, options);
+  const fallback = candidate
+    ? localCandidates.find((item) => item.url !== candidate.url)
+    : undefined;
   return {
     candidate,
-    fallback:
-      candidate && localCandidate && candidate.url !== localCandidate.url
-        ? localCandidate
-        : null,
+    fallback: fallback ? attachGallery(fallback, resolution) : null,
   };
 }
 
@@ -79,6 +83,22 @@ export async function resolveGalleryCandidate(
   };
 }
 
+export async function resolveDownloadCandidate(
+  candidate: MediaCandidate,
+  signal: AbortSignal,
+): Promise<MediaCandidate | null> {
+  if (!candidate.linkedPageUrl) return null;
+  signal.throwIfAborted();
+  const linked = await resolveLinkedDocument(candidate.linkedPageUrl, signal);
+  signal.throwIfAborted();
+  return rankCandidates(
+    linked.filter(
+      (item) => item.kind === "image" && item.source === "document-original-link",
+    ),
+    { showSameSizeImages: true },
+  )[0] ?? null;
+}
+
 function selectBestCandidate(
   linked: MediaCandidate[],
   resolution: DomResolution,
@@ -89,7 +109,26 @@ function selectBestCandidate(
     ...(resolution.renderedSize ? { renderedSize: resolution.renderedSize } : {}),
   });
   const selected = ranked[0];
-  return selected ? attachGallery(selected, resolution) : null;
+  return selected
+    ? attachGallery(attachLinkedPage(selected, resolution), resolution)
+    : null;
+}
+
+function attachLinkedPage(
+  candidate: MediaCandidate,
+  resolution: DomResolution,
+): MediaCandidate {
+  const linkedPageUrl = resolution.anchorUrl;
+  if (
+    !linkedPageUrl ||
+    linkedPageUrl === candidate.url ||
+    candidate.linkedPageUrl ||
+    candidate.source === "document-metadata" ||
+    candidate.source === "document-original-link"
+  ) {
+    return candidate;
+  }
+  return { ...candidate, linkedPageUrl };
 }
 
 function attachGallery(candidate: MediaCandidate, resolution: DomResolution): MediaCandidate {

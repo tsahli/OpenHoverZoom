@@ -121,6 +121,7 @@ describe("preview overlay", () => {
     const local = imageCandidate("local", "Local caption");
     const original = imageCandidate("original", "Original caption");
     const createElement = vi.spyOn(document, "createElement");
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
     const overlay = new PreviewOverlay(85);
 
     overlay.prepare(local);
@@ -141,6 +142,23 @@ describe("preview overlay", () => {
       "https://cdn.example/local.jpg",
     );
     expect(previewPanel().textContent).toContain("Local caption");
+    expect(debug).not.toHaveBeenCalled();
+  });
+
+  it("hides a failed preview and reports it only at debug level", async () => {
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const overlay = new PreviewOverlay(85);
+    overlay.show(imageCandidate("missing", "Missing image"));
+
+    previewPanel().querySelector(".preload-bin img")?.dispatchEvent(new Event("error"));
+    await Promise.resolve();
+
+    expect(previewPanel().hidden).toBe(true);
+    expect(warn).not.toHaveBeenCalled();
+    expect(debug).toHaveBeenCalledWith(
+      "[OpenHoverZoom] Preview candidate did not load (image, srcset): https://cdn.example/missing.jpg",
+    );
   });
 
   it("keeps a prepared local image hidden when the selected image succeeds", async () => {
@@ -181,12 +199,17 @@ describe("preview overlay", () => {
     expect(overlay.getVisibleImageUrl()).toBe(
       "https://cdn.example/downloadable.jpg",
     );
+    expect(overlay.getVisibleImageCandidate()).toMatchObject({
+      url: "https://cdn.example/downloadable.jpg",
+      kind: "image",
+    });
     overlay.updateSettings(85, "Shift+D");
     expect(previewPanel().querySelector(".download-hint")?.textContent).toBe(
       "Shift+D ⤓",
     );
     overlay.hide();
     expect(overlay.getVisibleImageUrl()).toBeNull();
+    expect(overlay.getVisibleImageCandidate()).toBeNull();
   });
 
   it("removes a leading File prefix from the displayed caption", async () => {

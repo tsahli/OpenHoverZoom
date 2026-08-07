@@ -92,6 +92,12 @@ export class PreviewOverlay {
       : null;
   }
 
+  getVisibleImageCandidate(): MediaCandidate | null {
+    return !this.#panel.hidden && this.#currentCandidate?.kind === "image"
+      ? this.#currentCandidate
+      : null;
+  }
+
   showLoading(): void {
     this.#ensureConnected();
     this.#renderSequence += 1;
@@ -254,10 +260,6 @@ export class PreviewOverlay {
         this.#commitMedia(media, candidate);
         return;
       }
-      console.warn("[OpenHoverZoom] Preview media failed to load", {
-        kind: candidate.kind,
-        source: candidate.source,
-      });
       if (fallback && fallback.url !== candidate.url) {
         this.#gallery[index] = stripGallery(fallback);
         this.#loadIndex(index);
@@ -266,8 +268,12 @@ export class PreviewOverlay {
       if (hasVisibleMedia) {
         this.#requestedGalleryIndex = this.#galleryIndex;
         preloader.remove();
+        return;
       }
-      else this.hide();
+      console.debug(
+        `[OpenHoverZoom] Preview candidate did not load (${candidate.kind}, ${candidate.source}): ${candidate.url}`,
+      );
+      this.hide();
     });
     const loader = this.#panel.querySelector<HTMLElement>(".loader");
     if (!hasVisibleMedia && loader) loader.setAttribute("aria-label", "Loading preview");

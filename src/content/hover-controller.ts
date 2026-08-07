@@ -1,4 +1,9 @@
-import { resolveGalleryCandidate, resolveTarget } from "../resolver";
+import {
+  resolveDownloadCandidate,
+  resolveGalleryCandidate,
+  resolveTarget,
+} from "../resolver";
+import type { MediaCandidate } from "../resolver/candidate";
 import { isSiteDisabled, type Settings } from "../shared/settings";
 import { matchesDownloadShortcut } from "../shared/keyboard-shortcut";
 import { requestImageDownload } from "./download-client";
@@ -79,12 +84,12 @@ export class HoverController {
       this.#clearAll();
       return;
     }
-    const imageUrl = this.overlay.getVisibleImageUrl();
-    if (imageUrl && matchesDownloadShortcut(event, this.#settings.downloadShortcut)) {
+    const imageCandidate = this.overlay.getVisibleImageCandidate();
+    if (imageCandidate && matchesDownloadShortcut(event, this.#settings.downloadShortcut)) {
       event.preventDefault();
       event.stopPropagation();
       if (!event.repeat) {
-        void requestImageDownload(imageUrl).catch((error: unknown) => {
+        void this.#downloadImage(imageCandidate).catch((error: unknown) => {
           console.warn("[OpenHoverZoom] Image download request failed", error);
         });
       }
@@ -300,6 +305,19 @@ export class HoverController {
       .finally(() => {
         if (this.#galleryRequest === request) this.#galleryRequest = null;
       });
+  }
+
+  async #downloadImage(candidate: MediaCandidate): Promise<void> {
+    let downloadCandidate = candidate;
+    if (candidate.linkedPageUrl) {
+      try {
+        downloadCandidate =
+          await resolveDownloadCandidate(candidate, new AbortController().signal) ?? candidate;
+      } catch (error) {
+        console.warn("[OpenHoverZoom] Original image lookup failed", error);
+      }
+    }
+    await requestImageDownload(downloadCandidate.url);
   }
 
   #clearAll(): void {

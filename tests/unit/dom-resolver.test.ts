@@ -34,6 +34,34 @@ describe("DOM resolver", () => {
     expect(urls).toContain("http://localhost:3000/original.jpg");
   });
 
+  it("selects the largest candidate from a lazy-loaded srcset", () => {
+    const image = document.createElement("img");
+    image.setAttribute("data-srcset", "/lazy-small.jpg 400w, /lazy-original.jpg 3200w");
+    document.body.append(image);
+
+    expect(resolveDomTarget(image, { showSameSizeImages: false }).candidates[0]).toMatchObject({
+      url: "http://localhost:3000/lazy-original.jpg",
+      source: "srcset",
+      quality: "responsive",
+      width: 3200,
+    });
+  });
+
+  it("does not treat a full-size attribute on an ancestor as the hovered image's original", () => {
+    const wrapper = document.createElement("div");
+    wrapper.setAttribute("data-original", "/unrelated-container-image.jpg");
+    const image = document.createElement("img");
+    image.srcset = "/hovered-preview.jpg 1200w, /hovered-original.jpg 4000w";
+    wrapper.append(image);
+    document.body.append(wrapper);
+
+    expect(resolveDomTarget(image, { showSameSizeImages: false }).candidates[0]).toMatchObject({
+      url: "http://localhost:3000/hovered-original.jpg",
+      source: "srcset",
+      width: 4000,
+    });
+  });
+
   it("retains a rendered-size thumbnail only as a failure fallback", () => {
     const image = document.createElement("img");
     image.src = "/thumbnail.jpg";
@@ -217,6 +245,27 @@ describe("DOM resolver", () => {
       "http://localhost:3000/photos/one",
       "http://localhost:3000/photos/two",
       "http://localhost:3000/photos/three",
+    ]);
+  });
+
+  it("uses each gallery item's highest-quality source", () => {
+    const gallery = document.createElement("section");
+    gallery.className = "gallery";
+    const images = ["one", "two"].map((name) => {
+      const image = document.createElement("img");
+      image.srcset = `/${name}-preview.jpg 1200w`;
+      image.setAttribute("data-srcset", `/${name}-large.jpg 3200w`);
+      image.setAttribute("data-full", `/${name}-original.jpg`);
+      gallery.append(image);
+      return image;
+    });
+    document.body.append(gallery);
+
+    const resolution = resolveDomTarget(images[0]!, { showSameSizeImages: false });
+
+    expect(resolution.gallery?.items.map((item) => item.url)).toEqual([
+      "http://localhost:3000/one-original.jpg",
+      "http://localhost:3000/two-original.jpg",
     ]);
   });
 

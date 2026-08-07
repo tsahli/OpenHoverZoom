@@ -31,6 +31,7 @@ export async function resolveLinkedDocument(
           kind: directKind,
           source: "document-metadata" as const,
           confidence: 99,
+          quality: "original" as const,
         },
       ]
     : response.body

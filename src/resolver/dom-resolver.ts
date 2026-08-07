@@ -18,6 +18,8 @@ export const LAZY_SOURCE_ATTRIBUTES = [
   "data-url",
 ] as const;
 
+const LAZY_SRCSET_ATTRIBUTES = ["data-srcset", "data-lazy-srcset"] as const;
+
 const MAX_CONTEXT_DEPTH = 5;
 const CONTEXT_DESCENDANT_WALK = { maxDepth: 4, maxElements: 32 } as const;
 const MIN_COVERING_LINK_OVERLAP = 0.75;
@@ -83,7 +85,14 @@ export function resolveDomTarget(
     if (element instanceof HTMLVideoElement) {
       addVideoCandidates(candidates, element, baseUrl);
     }
-    addLazyCandidates(candidates, element, baseUrl, caption);
+    addLazySrcsetCandidates(candidates, element, baseUrl, caption);
+    addLazyCandidates(
+      candidates,
+      element,
+      baseUrl,
+      caption,
+      element === target || element === primaryImage,
+    );
     addBackgroundCandidates(candidates, element, baseUrl, caption);
   }
 
@@ -102,6 +111,7 @@ export function resolveDomTarget(
         // extension as a strong hint, then let the linked-document resolver
         // verify the response content type before it receives top priority.
         confidence: 92,
+        quality: "display",
         ...(caption ? { caption } : {}),
       });
     }
@@ -246,6 +256,7 @@ function addImageCandidates(
       kind: "image",
       source: "srcset",
       confidence: 90,
+      quality: "responsive",
       ...(largest.width ? { width: largest.width } : {}),
       ...(caption ? { caption } : {}),
     });
@@ -265,6 +276,7 @@ function addPictureCandidates(
       kind: "image",
       source: "picture",
       confidence: 94,
+      quality: "responsive",
       ...(largest.width ? { width: largest.width } : {}),
       ...(caption ? { caption } : {}),
     });
@@ -300,17 +312,40 @@ function addLazyCandidates(
   element: Element,
   baseUrl: string,
   caption: string | undefined,
+  isPrimaryElement: boolean,
 ): void {
   for (const attribute of LAZY_SOURCE_ATTRIBUTES) {
     const value = element.getAttribute(attribute);
     if (!value) continue;
     const normalized = normalizeUrl(value, baseUrl, { allowPageLocal: true });
     if (!normalized) continue;
+    const isExplicitFullSize = attribute.includes("full") || attribute === "data-original";
     candidates.push({
       url: normalized,
       kind: mediaKindFromUrl(normalized) ?? "image",
       source: "data-attribute",
-      confidence: attribute.includes("full") || attribute === "data-original" ? 88 : 80,
+      confidence: isExplicitFullSize ? 88 : 80,
+      quality: isExplicitFullSize && isPrimaryElement ? "original" : "display",
+      ...(caption ? { caption } : {}),
+    });
+  }
+}
+
+function addLazySrcsetCandidates(
+  candidates: MediaCandidate[],
+  element: Element,
+  baseUrl: string,
+  caption: string | undefined,
+): void {
+  for (const attribute of LAZY_SRCSET_ATTRIBUTES) {
+    const largest = selectLargestSrcset(element.getAttribute(attribute) ?? "");
+    if (!largest) continue;
+    addCandidate(candidates, largest.url, baseUrl, {
+      kind: "image",
+      source: "srcset",
+      confidence: 90,
+      quality: "responsive",
+      ...(largest.width ? { width: largest.width } : {}),
       ...(caption ? { caption } : {}),
     });
   }

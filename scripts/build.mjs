@@ -1,18 +1,23 @@
 import { cp, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
-const projectRoot = new URL("../", import.meta.url);
-const distDirectory = new URL("../dist/", import.meta.url);
+const projectRoot = fileURLToPath(new URL("../", import.meta.url));
+const distDirectory = join(projectRoot, "dist");
 
 await rm(distDirectory, { recursive: true, force: true });
 await mkdir(distDirectory, { recursive: true });
-await cp(new URL("../static/", import.meta.url), distDirectory, {
-  recursive: true,
-});
+
 await cp(
-  new URL("../src/content/content.css", import.meta.url),
-  join(distDirectory.pathname, "content.css"),
+  fileURLToPath(new URL("../static/", import.meta.url)),
+  distDirectory,
+  { recursive: true },
+);
+
+await cp(
+  fileURLToPath(new URL("../src/content/content.css", import.meta.url)),
+  join(distDirectory, "content.css"),
 );
 
 const shared = {
@@ -21,25 +26,29 @@ const shared = {
   minify: false,
   sourcemap: false,
   target: "chrome120",
-  tsconfig: new URL("../tsconfig.json", import.meta.url).pathname,
+  tsconfig: fileURLToPath(new URL("../tsconfig.json", import.meta.url)),
 };
 
 await build({
   ...shared,
-  entryPoints: [new URL("../src/content/index.ts", import.meta.url).pathname],
-  outfile: new URL("../dist/content.js", import.meta.url).pathname,
+  entryPoints: [
+    fileURLToPath(new URL("../src/content/index.ts", import.meta.url)),
+  ],
+  outfile: join(distDirectory, "content.js"),
   format: "iife",
 });
 
 await build({
   ...shared,
   entryPoints: {
-    background: new URL("../src/background/index.ts", import.meta.url).pathname,
-    popup: new URL("../src/popup/index.ts", import.meta.url).pathname,
-    options: new URL("../src/options/index.ts", import.meta.url).pathname,
+    background: fileURLToPath(
+      new URL("../src/background/index.ts", import.meta.url),
+    ),
+    popup: fileURLToPath(new URL("../src/popup/index.ts", import.meta.url)),
+    options: fileURLToPath(new URL("../src/options/index.ts", import.meta.url)),
   },
-  outdir: distDirectory.pathname,
+  outdir: distDirectory,
   format: "esm",
 });
 
-console.log(`Built extension at ${distDirectory.pathname}`);
+console.log(`Built extension at ${distDirectory}`);

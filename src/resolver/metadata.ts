@@ -1,4 +1,8 @@
-import type { CandidateQuality, MediaCandidate, MediaKind } from "./candidate";
+import type {
+  CandidateQuality,
+  MediaCandidate,
+  MediaKind,
+} from "./candidate";
 import { mediaKindFromUrl } from "./media-type";
 import { selectLargestSrcset } from "./srcset";
 import { normalizeUrl } from "./url";
@@ -21,6 +25,7 @@ export function extractMetadataCandidates(
   const candidates: MediaCandidate[] = [];
   const structuredGalleryUrls: string[] = [];
   let openGraphImage: MediaCandidate | null = null;
+  let openGraphVideo: MediaCandidate | null = null;
   let twitterImage: MediaCandidate | null = null;
 
   for (const meta of parsed.querySelectorAll("meta[property], meta[name]")) {
@@ -56,8 +61,29 @@ export function extractMetadataCandidates(
     } else if (key === "twitter:image:height") {
       setDimension(twitterImage, "height", content);
     } else if (key === "og:video" || key === "og:video:secure_url") {
-      addCandidate(candidates, content, documentUrl, "video", 96, "display", caption);
+      openGraphVideo = addCandidate(
+        candidates,
+        content,
+        documentUrl,
+        "video",
+        96,
+        "responsive",
+        caption,
+      );
+    } else if (key === "og:video:width") {
+      setDimension(openGraphVideo, "width", content);
+    } else if (key === "og:video:height") {
+      setDimension(openGraphVideo, "height", content);
+    } else if (key === "og:audio" || key === "og:audio:secure_url") {
+      addCandidate(candidates, content, documentUrl, "audio", 96, "responsive", caption);
     }
+  }
+
+  for (const video of parsed.querySelectorAll("video")) {
+    addHtmlMediaCandidates(candidates, video, documentUrl, "video", caption);
+  }
+  for (const audio of parsed.querySelectorAll("audio")) {
+    addHtmlMediaCandidates(candidates, audio, documentUrl, "audio", caption);
   }
 
   for (const link of parsed.querySelectorAll("link[href]")) {
@@ -168,7 +194,9 @@ export function extractMetadataCandidates(
           candidates,
           item.url,
           documentUrl,
-          mediaKindFromUrl(item.url) ?? "image",
+          item.key === "thumbnailUrl" || item.key === "image"
+            ? "image"
+            : mediaKindFromUrl(item.url) ?? item.kind ?? "image",
           item.key === "thumbnailUrl" ? 76 : item.key === "contentUrl" ? 96 : 86,
           item.key === "thumbnailUrl"
             ? "thumbnail"
@@ -194,6 +222,7 @@ interface CollectedJsonLdMedia {
   key: string;
   url: string;
   primaryMedia: boolean;
+  kind?: MediaKind;
   width?: number;
   height?: number;
 }
@@ -205,6 +234,7 @@ function collectJsonLdMedia(root: unknown): CollectedJsonLdMedia[] {
     key: string;
     value: unknown;
     primaryMedia: boolean;
+    kind?: MediaKind;
     width?: number;
     height?: number;
   }> = [
@@ -224,6 +254,7 @@ function collectJsonLdMedia(root: unknown): CollectedJsonLdMedia[] {
           key: item.key,
           url: item.value,
           primaryMedia: item.primaryMedia,
+          ...(item.kind ? { kind: item.kind } : {}),
           ...(item.width ? { width: item.width } : {}),
           ...(item.height ? { height: item.height } : {}),
         });
@@ -237,6 +268,7 @@ function collectJsonLdMedia(root: unknown): CollectedJsonLdMedia[] {
           key: item.key,
           value,
           primaryMedia: item.primaryMedia,
+          ...(item.kind ? { kind: item.kind } : {}),
           ...(item.width ? { width: item.width } : {}),
           ...(item.height ? { height: item.height } : {}),
         });
@@ -247,14 +279,28 @@ function collectJsonLdMedia(root: unknown): CollectedJsonLdMedia[] {
     const record = item.value as Record<string, unknown>;
     const width = jsonLdDimension(record.width) ?? item.width;
     const height = jsonLdDimension(record.height) ?? item.height;
-    const isImageObject = jsonLdTypes(record["@type"]).some(
+    const types = jsonLdTypes(record["@type"]);
+    const isImageObject = types.some(
       (type) => type === "ImageObject" || /[/#]ImageObject$/u.test(type),
     );
-    const isMediaObject = jsonLdTypes(record["@type"]).some(
+    const isVideoObject = types.some(
+      (type) => type === "VideoObject" || /[/#]VideoObject$/u.test(type),
+    );
+    const isAudioObject = types.some(
+      (type) => type === "AudioObject" || /[/#]AudioObject$/u.test(type),
+    );
+    const isMediaObject = types.some(
       (type) =>
         /^(?:AudioObject|ImageObject|MediaObject|VideoObject)$/u.test(type) ||
         /[/#](?:AudioObject|ImageObject|MediaObject|VideoObject)$/u.test(type),
     );
+    const kind: MediaKind | undefined = isVideoObject
+      ? "video"
+      : isAudioObject
+        ? "audio"
+        : isImageObject
+          ? "image"
+          : item.kind;
     const primaryMedia =
       item.primaryMedia || (item.key === "" && isMediaObject);
     for (const [key, value] of Object.entries(item.value)) {
@@ -265,6 +311,7 @@ function collectJsonLdMedia(root: unknown): CollectedJsonLdMedia[] {
           key: mediaKey,
           value,
           primaryMedia: primaryMedia || PRIMARY_MEDIA_KEYS.has(key),
+          ...(kind ? { kind } : {}),
           ...(width ? { width } : {}),
           ...(height ? { height } : {}),
         });
@@ -272,6 +319,55 @@ function collectJsonLdMedia(root: unknown): CollectedJsonLdMedia[] {
     }
   }
   return results;
+}
+
+function addHtmlMediaCandidates(
+  candidates: MediaCandidate[],
+  media: HTMLMediaElement,
+  documentUrl: string,
+  kind: "video" | "audio",
+  caption: string | undefined,
+): void {
+  const width = kind === "video" ? elementDimension(media, "width") : undefined;
+  const height = kind === "video" ? elementDimension(media, "height") : undefined;
+  const src = media.getAttribute("src");
+  if (src) {
+    addCandidate(
+      candidates,
+      src,
+      documentUrl,
+      kind,
+      86,
+      "display",
+      caption,
+      width,
+      height,
+    );
+  }
+  for (const source of media.querySelectorAll(":scope > source[src]")) {
+    addCandidate(
+      candidates,
+      source.getAttribute("src") ?? "",
+      documentUrl,
+      kind,
+      84,
+      "display",
+      caption,
+      kind === "video" ? elementDimension(source, "width") ?? width : undefined,
+      kind === "video" ? elementDimension(source, "height") ?? height : undefined,
+    );
+  }
+}
+
+function elementDimension(element: Element, dimension: "width" | "height"): number | undefined {
+  for (const attribute of [`data-${dimension}`, dimension]) {
+    const value = element.getAttribute(attribute);
+    if (value) {
+      const parsed = positiveDimension(value);
+      if (parsed) return parsed;
+    }
+  }
+  return undefined;
 }
 
 function addCandidate(

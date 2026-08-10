@@ -11,7 +11,7 @@ import {
   matchesPreviewDisableShortcut,
   releasesPreviewDisableShortcut,
 } from "../shared/keyboard-shortcut";
-import { requestImageDownload } from "./download-client";
+import { requestMediaDownload } from "./download-client";
 import { PreviewOverlay, type GallerySelection } from "./preview-overlay";
 import { findHoverTarget } from "./target-inspector";
 
@@ -61,7 +61,11 @@ export class HoverController {
       this.#previewDisablePressed = false;
     }
     this.#settings = settings;
-    this.overlay.updateSettings(settings.maxPreviewPercent, settings.downloadShortcut);
+    this.overlay.updateSettings(
+      settings.maxPreviewPercent,
+      settings.downloadShortcut,
+      settings.mediaVolumePercent,
+    );
     if (!this.#isEnabled()) this.#clearAll();
   }
 
@@ -105,13 +109,13 @@ export class HoverController {
       this.#beginPreviewDisable();
       return;
     }
-    const imageCandidate = this.overlay.getVisibleImageCandidate();
-    if (imageCandidate && matchesDownloadShortcut(event, this.#settings.downloadShortcut)) {
+    const mediaCandidate = this.overlay.getVisibleMediaCandidate();
+    if (mediaCandidate && matchesDownloadShortcut(event, this.#settings.downloadShortcut)) {
       event.preventDefault();
       event.stopPropagation();
       if (!event.repeat) {
-        void this.#downloadImage(imageCandidate).catch((error: unknown) => {
-          console.warn("[OpenHoverZoom] Image download request failed", error);
+        void this.#downloadMedia(mediaCandidate).catch((error: unknown) => {
+          console.warn("[OpenHoverZoom] Media download request failed", error);
         });
       }
       return;
@@ -372,17 +376,17 @@ export class HoverController {
       });
   }
 
-  async #downloadImage(candidate: MediaCandidate): Promise<void> {
+  async #downloadMedia(candidate: MediaCandidate): Promise<void> {
     let downloadCandidate = candidate;
     if (candidate.linkedPageUrl) {
       try {
         downloadCandidate =
           await resolveDownloadCandidate(candidate, new AbortController().signal) ?? candidate;
       } catch (error) {
-        console.warn("[OpenHoverZoom] Original image lookup failed", error);
+        console.warn("[OpenHoverZoom] Original media lookup failed", error);
       }
     }
-    await requestImageDownload(downloadCandidate.url);
+    await requestMediaDownload(downloadCandidate.url);
   }
 
   #clearAll(): void {

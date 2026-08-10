@@ -12,6 +12,7 @@ import {
 const form = requiredElement<HTMLFormElement>("settings-form");
 const hoverDelay = requiredElement<HTMLInputElement>("hover-delay");
 const previewSize = requiredElement<HTMLInputElement>("preview-size");
+const mediaVolume = requiredElement<HTMLInputElement>("media-volume");
 const sameSize = requiredElement<HTMLInputElement>("same-size");
 const downloadShortcut = requiredElement<HTMLInputElement>("download-shortcut");
 const resetDownloadShortcut = requiredElement<HTMLButtonElement>("reset-download-shortcut");
@@ -87,6 +88,7 @@ async function initialize(): Promise<void> {
         ...settings,
         hoverDelayMs: hoverDelay.valueAsNumber,
         maxPreviewPercent: previewSize.valueAsNumber,
+        mediaVolumePercent: mediaVolume.valueAsNumber,
         showSameSizeImages: sameSize.checked,
         downloadShortcut: nextDownloadShortcut,
         previewDisableShortcut: nextPreviewDisableShortcut,
@@ -102,6 +104,7 @@ async function initialize(): Promise<void> {
 function render(): void {
   hoverDelay.value = String(settings.hoverDelayMs);
   previewSize.value = String(settings.maxPreviewPercent);
+  mediaVolume.value = String(settings.mediaVolumePercent);
   sameSize.checked = settings.showSameSizeImages;
   downloadShortcut.value = settings.downloadShortcut;
   previewDisableShortcut.value = settings.previewDisableShortcut;

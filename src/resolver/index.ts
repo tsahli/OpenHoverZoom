@@ -65,7 +65,8 @@ export async function resolveGalleryCandidate(
   signal.throwIfAborted();
   const linked = await resolveLinkedDocument(candidate.linkedPageUrl, signal);
   signal.throwIfAborted();
-  const selected = rankCandidates([...linked, candidate], {
+  const sameKind = linked.filter((item) => item.kind === candidate.kind);
+  const selected = rankCandidates([...sameKind, candidate], {
     showSameSizeImages: true,
   })[0];
   if (!selected || selected.url === candidate.url) return null;
@@ -93,7 +94,7 @@ export async function resolveDownloadCandidate(
   signal.throwIfAborted();
   return rankCandidates(
     linked.filter(
-      (item) => item.kind === "image" && item.source === "document-original-link",
+      (item) => item.kind === candidate.kind && item.source === "document-original-link",
     ),
     { showSameSizeImages: true },
   )[0] ?? null;
@@ -104,7 +105,22 @@ function selectBestCandidate(
   resolution: DomResolution,
   options: ResolverOptions,
 ): MediaCandidate | null {
-  const ranked = rankCandidates([...linked, ...resolution.candidates], {
+  const directLink = resolution.candidates.find(
+    (candidate) => candidate.source === "direct-link",
+  );
+  const verifiedLinkedKind = directLink
+    ? rankCandidates(linked, { showSameSizeImages: true })[0]?.kind
+    : undefined;
+  const expectedKind =
+    resolution.candidates.find((candidate) => candidate.source === "video-source")?.kind ??
+    verifiedLinkedKind ??
+    directLink?.kind ??
+    resolution.candidates[0]?.kind;
+  const candidates = [...linked, ...resolution.candidates];
+  const sameKind = expectedKind
+    ? candidates.filter((candidate) => candidate.kind === expectedKind)
+    : candidates;
+  const ranked = rankCandidates(sameKind, {
     showSameSizeImages: options.showSameSizeImages,
     ...(resolution.renderedSize ? { renderedSize: resolution.renderedSize } : {}),
   });

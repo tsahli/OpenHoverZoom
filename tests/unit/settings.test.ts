@@ -17,6 +17,7 @@ describe("settings", () => {
         enabled: false,
         hoverDelayMs: 9,
         maxPreviewPercent: 120,
+        mediaVolumePercent: 130,
         downloadShortcut: "command+shift+d",
         disabledSites: ["Example.COM", "bad/site", "example.com"],
       }),
@@ -24,9 +25,16 @@ describe("settings", () => {
       enabled: false,
       hoverDelayMs: 100,
       maxPreviewPercent: 95,
+      mediaVolumePercent: 100,
       downloadShortcut: "Shift+Meta+D",
       disabledSites: ["example.com"],
     });
+  });
+
+  it("defaults and bounds hover media volume from zero to one hundred", () => {
+    expect(sanitizeSettings({}).mediaVolumePercent).toBe(75);
+    expect(sanitizeSettings({ mediaVolumePercent: -1 }).mediaVolumePercent).toBe(0);
+    expect(sanitizeSettings({ mediaVolumePercent: 40.6 }).mediaVolumePercent).toBe(41);
   });
 
   it("captures, normalizes, and matches download shortcuts", () => {

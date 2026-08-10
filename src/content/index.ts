@@ -9,6 +9,7 @@ async function initialize(): Promise<void> {
   const overlay = new PreviewOverlay(
     settings.maxPreviewPercent,
     settings.downloadShortcut,
+    settings.mediaVolumePercent,
   );
   const controller = new HoverController(overlay, settings);
 

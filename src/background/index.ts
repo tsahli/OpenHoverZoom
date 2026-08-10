@@ -25,7 +25,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
       conflictAction: "uniquify",
       saveAs: false,
     }).catch((error: unknown) => {
-      console.warn("[OpenHoverZoom] Image download failed", error);
+      console.warn("[OpenHoverZoom] Media download failed", error);
     });
     sendResponse({ accepted: true });
     return false;

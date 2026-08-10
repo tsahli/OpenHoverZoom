@@ -3,6 +3,9 @@ import { PreviewOverlay } from "../../src/content/preview-overlay";
 import type { MediaCandidate } from "../../src/resolver/candidate";
 
 const originalAttachShadow = HTMLElement.prototype.attachShadow;
+let playMedia: ReturnType<typeof vi.spyOn>;
+let pauseMedia: ReturnType<typeof vi.spyOn>;
+let loadMedia: ReturnType<typeof vi.spyOn>;
 
 describe("preview overlay", () => {
   beforeEach(() => {
@@ -13,6 +16,9 @@ describe("preview overlay", () => {
     ) {
       return originalAttachShadow.call(this, { ...init, mode: "open" });
     });
+    playMedia = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    pauseMedia = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
+    loadMedia = vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
   });
 
   it("renders a visible loading placeholder", () => {
@@ -212,6 +218,92 @@ describe("preview overlay", () => {
     expect(overlay.getVisibleImageCandidate()).toBeNull();
   });
 
+  it("starts a committed video at the configured volume and stops it on hide", async () => {
+    const overlay = new PreviewOverlay(85, "Enter", 75);
+    overlay.show(videoCandidate("clip"));
+    const video = previewPanel().querySelector<HTMLVideoElement>(".preload-bin video");
+    if (!video) throw new Error("Expected a preloaded video");
+
+    expect(video.autoplay).toBe(false);
+    expect(video.muted).toBe(true);
+    expect(playMedia).not.toHaveBeenCalled();
+
+    video.dispatchEvent(new Event("loadedmetadata"));
+    await Promise.resolve();
+
+    expect(previewPanel().querySelector(".media-frame video")).toBe(video);
+    expect(video.volume).toBe(0.75);
+    expect(video.muted).toBe(false);
+    expect(playMedia).toHaveBeenCalledOnce();
+    expect(previewPanel().querySelector(".download-hint")?.textContent).toBe("Enter ⤓");
+
+    overlay.updateSettings(85, "Enter", 25);
+    expect(video.volume).toBe(0.25);
+    expect(video.muted).toBe(false);
+
+    overlay.hide();
+    expect(pauseMedia).toHaveBeenCalledWith();
+    expect(loadMedia).toHaveBeenCalledWith();
+    expect(video.hasAttribute("src")).toBe(false);
+  });
+
+  it("starts audio once its metadata is loaded", async () => {
+    const overlay = new PreviewOverlay(85, "Enter", 50);
+    overlay.show({
+      url: "https://cdn.example/track.opus",
+      kind: "audio",
+      source: "direct-link",
+      confidence: 92,
+    });
+    const audio = previewPanel().querySelector<HTMLAudioElement>(".preload-bin audio");
+    audio?.dispatchEvent(new Event("loadedmetadata"));
+    await Promise.resolve();
+
+    expect(previewPanel().querySelector(".media-frame audio")).toBe(audio);
+    expect(audio?.volume).toBe(0.5);
+    expect(playMedia).toHaveBeenCalledOnce();
+  });
+
+  it("does not try to play an image when settings change", async () => {
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    const overlay = new PreviewOverlay(85);
+    overlay.show(imageCandidate("still", "Still image"));
+    previewPanel().querySelector(".preload-bin img")?.dispatchEvent(new Event("load"));
+    await Promise.resolve();
+
+    overlay.updateSettings(75, "Shift+D", 25);
+
+    expect(debug).not.toHaveBeenCalled();
+  });
+
+  it("falls back to muted video when Chrome blocks audible autoplay", async () => {
+    playMedia
+      .mockRejectedValueOnce(new DOMException("Playback blocked", "NotAllowedError"))
+      .mockResolvedValueOnce(undefined);
+    const overlay = new PreviewOverlay(85, "Enter", 75);
+    overlay.show(videoCandidate("blocked"));
+    const video = previewPanel().querySelector<HTMLVideoElement>(".preload-bin video");
+    video?.dispatchEvent(new Event("loadedmetadata"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(video?.muted).toBe(true);
+    expect(playMedia).toHaveBeenCalledTimes(2);
+    expect(previewPanel().querySelector(".audio-status")?.textContent).toBe("Audio blocked");
+  });
+
+  it("keeps media muted when hover volume is zero", async () => {
+    const overlay = new PreviewOverlay(85, "Enter", 0);
+    overlay.show(videoCandidate("silent"));
+    const video = previewPanel().querySelector<HTMLVideoElement>(".preload-bin video");
+    video?.dispatchEvent(new Event("loadedmetadata"));
+    await Promise.resolve();
+
+    expect(video?.volume).toBe(0);
+    expect(video?.muted).toBe(true);
+    expect(previewPanel().querySelector(".audio-status")).toBeNull();
+  });
+
   it("removes a leading File prefix from the displayed caption", async () => {
     const overlay = new PreviewOverlay(85);
     overlay.show(imageCandidate("wikimedia", "File: Mountain landscape.jpg"));
@@ -276,6 +368,15 @@ function imageCandidate(name: string, caption: string): MediaCandidate {
     source: "srcset",
     confidence: 90,
     caption,
+  };
+}
+
+function videoCandidate(name: string): MediaCandidate {
+  return {
+    url: `https://cdn.example/${name}.webm`,
+    kind: "video",
+    source: "video-source",
+    confidence: 92,
   };
 }
 

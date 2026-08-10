@@ -35,6 +35,87 @@ describe("linked-document metadata", () => {
     });
   });
 
+  it("retains Open Graph video dimensions and audio candidates", () => {
+    const candidates = extractMetadataCandidates(
+      `<meta property="og:video" content="/movie.mp4">
+       <meta property="og:video:width" content="3840">
+       <meta property="og:video:height" content="2160">
+       <meta property="og:audio" content="/soundtrack.opus">`,
+      "https://example.com/watch/1",
+    );
+
+    expect(candidates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          url: "https://example.com/movie.mp4",
+          kind: "video",
+          width: 3840,
+          height: 2160,
+        }),
+        expect.objectContaining({
+          url: "https://example.com/soundtrack.opus",
+          kind: "audio",
+        }),
+      ]),
+    );
+  });
+
+  it("uses VideoObject semantics for extensionless content URLs", () => {
+    const candidates = extractMetadataCandidates(
+      `<script type="application/ld+json">
+        {"@type":"VideoObject","contentUrl":"/media/stream?id=1","width":1920,"height":1080}
+       </script>`,
+      "https://example.com/watch/1",
+    );
+
+    expect(candidates).toContainEqual(
+      expect.objectContaining({
+        url: "https://example.com/media/stream?id=1",
+        kind: "video",
+        quality: "original",
+        width: 1920,
+        height: 1080,
+      }),
+    );
+  });
+
+  it("keeps extensionless VideoObject thumbnails typed as images", () => {
+    const candidates = extractMetadataCandidates(
+      `<script type="application/ld+json">
+        {"@type":"VideoObject","thumbnailUrl":"/media/thumbnail?id=1"}
+       </script>`,
+      "https://example.com/watch/1",
+    );
+
+    expect(candidates).toContainEqual(
+      expect.objectContaining({
+        url: "https://example.com/media/thumbnail?id=1",
+        kind: "image",
+        quality: "thumbnail",
+      }),
+    );
+  });
+
+  it("extracts explicitly sized HTML video sources from detail pages", () => {
+    const candidates = extractMetadataCandidates(
+      `<video src="/movie-720.mp4" width="1280" height="720">
+         <source src="/movie-4k.webm" data-width="3840" data-height="2160">
+       </video>`,
+      "https://example.com/watch/1",
+    );
+
+    expect(candidates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          url: "https://example.com/movie-4k.webm",
+          kind: "video",
+          width: 3840,
+          height: 2160,
+        }),
+      ]),
+    );
+  });
+
   it("extracts bounded JSON-LD and responsive image values", () => {
     const candidates = extractMetadataCandidates(
       `<script type="application/ld+json">
@@ -165,6 +246,25 @@ describe("linked-document metadata", () => {
     expect(candidates).toContainEqual(
       expect.objectContaining({
         url: "https://example.com/media/original.avif",
+        quality: "responsive",
+      }),
+    );
+  });
+
+  it("does not let an unrelated video download replace the primary media", () => {
+    const candidates = extractMetadataCandidates(
+      `<meta property="og:image" content="/primary.jpg">
+       <a download href="/media/trailer.mp4">Download trailer</a>`,
+      "https://example.com/article/1",
+    );
+
+    expect(rankCandidates(candidates, { showSameSizeImages: true })[0]?.url).toBe(
+      "https://example.com/primary.jpg",
+    );
+    expect(candidates).toContainEqual(
+      expect.objectContaining({
+        url: "https://example.com/media/trailer.mp4",
+        source: "document-metadata",
         quality: "responsive",
       }),
     );

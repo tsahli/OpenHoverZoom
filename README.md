@@ -3,8 +3,10 @@
 <img src="static/icons/ohz-logo.svg" alt="OpenHoverZoom OHZ logo" width="96">
 
 Hover over a thumbnail or media link to preview the full-size image, video, or
-audio without leaving the page. Use the arrow keys to browse galleries. Press
-Enter to download the visible image; you can change this shortcut in the options.
+audio without leaving the page. Video and audio previews use the volume configured
+in the options when the browser permits audible autoplay. Use the arrow keys to
+browse galleries. Press Enter to download the best available version of the visible
+media; you can change this shortcut in the options.
 Hold Ctrl to temporarily hide and disable previews. Both shortcuts are customizable
 in the options.
 

@@ -65,6 +65,44 @@ describe("target resolver", () => {
     });
   });
 
+  it("uses the fetched media kind when a direct-link extension is misleading", async () => {
+    mocks.resolveDomTarget.mockReturnValue({
+      candidates: [
+        {
+          url: "https://cdn.example/media.jpg",
+          kind: "image",
+          source: "direct-link",
+          confidence: 92,
+          quality: "display",
+        },
+      ],
+      anchorUrl: "https://cdn.example/media.jpg",
+    });
+    mocks.resolveLinkedDocument.mockResolvedValue([
+      {
+        url: "https://cdn.example/media.jpg",
+        kind: "video",
+        source: "document-metadata",
+        confidence: 99,
+        quality: "original",
+      },
+    ]);
+
+    await expect(
+      resolveTarget(
+        document.createElement("a"),
+        { showSameSizeImages: false },
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({
+      candidate: {
+        url: "https://cdn.example/media.jpg",
+        kind: "video",
+        source: "document-metadata",
+      },
+    });
+  });
+
   it("uses a high-confidence local image without fetching an unrelated detail page", async () => {
     const responsive: MediaCandidate = {
       url: "https://cdn.example/large.jpg",
@@ -239,6 +277,64 @@ describe("target resolver", () => {
     });
   });
 
+  it("does not change an image gallery thumbnail into linked video", async () => {
+    const thumbnail: MediaCandidate = {
+      url: "https://cdn.example/poster.jpg",
+      kind: "image",
+      source: "srcset",
+      confidence: 90,
+      linkedPageUrl: "https://gallery.example/videos/123",
+    };
+    const video: MediaCandidate = {
+      url: "https://cdn.example/original.mp4",
+      kind: "video",
+      source: "document-metadata",
+      confidence: 96,
+      quality: "original",
+    };
+    mocks.resolveLinkedDocument.mockResolvedValue([video]);
+
+    await expect(
+      resolveGalleryCandidate(thumbnail, new AbortController().signal),
+    ).resolves.toBeNull();
+  });
+
+  it("does not change an initially hovered image into linked video", async () => {
+    const thumbnail: MediaCandidate = {
+      url: "https://cdn.example/poster.jpg",
+      kind: "image",
+      source: "current-src",
+      confidence: 62,
+    };
+    const video: MediaCandidate = {
+      url: "https://cdn.example/original.mp4",
+      kind: "video",
+      source: "document-metadata",
+      confidence: 96,
+      quality: "original",
+    };
+    mocks.resolveDomTarget.mockReturnValue({
+      candidates: [thumbnail],
+      fallbackCandidates: [thumbnail],
+      anchorUrl: "https://gallery.example/videos/123",
+    });
+    mocks.resolveLinkedDocument.mockResolvedValue([video]);
+
+    await expect(
+      resolveTarget(
+        document.createElement("img"),
+        { showSameSizeImages: true },
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({
+      candidate: {
+        ...thumbnail,
+        linkedPageUrl: "https://gallery.example/videos/123",
+      },
+      fallback: null,
+    });
+  });
+
   it("uses only a semantically explicit original for an on-demand download", async () => {
     const preview: MediaCandidate = {
       url: "https://cdn.example/preview.jpg",
@@ -271,6 +367,37 @@ describe("target resolver", () => {
     await expect(
       resolveDownloadCandidate(preview, new AbortController().signal),
     ).resolves.toBeNull();
+  });
+
+  it("keeps original downloads the same media kind as the visible preview", async () => {
+    const preview: MediaCandidate = {
+      url: "https://cdn.example/preview.webm",
+      kind: "video",
+      source: "video-source",
+      confidence: 92,
+      linkedPageUrl: "https://gallery.example/videos/123",
+    };
+    const poster: MediaCandidate = {
+      url: "https://cdn.example/poster.jpg",
+      kind: "image",
+      source: "document-original-link",
+      confidence: 99,
+      quality: "original",
+    };
+    const original: MediaCandidate = {
+      url: "https://cdn.example/original.mp4",
+      kind: "video",
+      source: "document-original-link",
+      confidence: 99,
+      quality: "original",
+      width: 3840,
+      height: 2160,
+    };
+    mocks.resolveLinkedDocument.mockResolvedValue([poster, original]);
+
+    await expect(
+      resolveDownloadCandidate(preview, new AbortController().signal),
+    ).resolves.toBe(original);
   });
 
   it("waits for slow metadata instead of returning a provisional local candidate", async () => {

@@ -288,6 +288,9 @@ function addVideoCandidates(
   video: HTMLVideoElement,
   baseUrl: string,
 ): void {
+  const dimensions = video.videoWidth > 0 && video.videoHeight > 0
+    ? { width: video.videoWidth, height: video.videoHeight }
+    : {};
   addCandidate(candidates, video.poster, baseUrl, {
     kind: "image",
     source: "video-poster",
@@ -297,14 +300,27 @@ function addVideoCandidates(
     kind: "video",
     source: "video-source",
     confidence: 92,
+    ...dimensions,
   });
   for (const source of video.querySelectorAll(":scope > source[src]")) {
+    const width = sourceDimension(source, "width");
+    const height = sourceDimension(source, "height");
     addCandidate(candidates, source.getAttribute("src"), baseUrl, {
       kind: "video",
       source: "video-source",
       confidence: 90,
+      ...(width ? { width } : {}),
+      ...(height ? { height } : {}),
     });
   }
+}
+
+function sourceDimension(source: Element, dimension: "width" | "height"): number | undefined {
+  for (const attribute of [`data-${dimension}`, dimension]) {
+    const value = Number.parseFloat(source.getAttribute(attribute) ?? "");
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  return undefined;
 }
 
 function addLazyCandidates(

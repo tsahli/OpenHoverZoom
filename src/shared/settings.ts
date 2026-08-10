@@ -10,6 +10,7 @@ export interface Settings {
   enabled: boolean;
   hoverDelayMs: number;
   maxPreviewPercent: number;
+  mediaVolumePercent: number;
   showSameSizeImages: boolean;
   downloadShortcut: string;
   previewDisableShortcut: string;
@@ -20,6 +21,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = {
   enabled: true,
   hoverDelayMs: 250,
   maxPreviewPercent: 85,
+  mediaVolumePercent: 75,
   showSameSizeImages: false,
   downloadShortcut: DEFAULT_DOWNLOAD_SHORTCUT,
   previewDisableShortcut: DEFAULT_PREVIEW_DISABLE_SHORTCUT,
@@ -46,6 +48,12 @@ export function sanitizeSettings(value: unknown): Settings {
       25,
       95,
       DEFAULT_SETTINGS.maxPreviewPercent,
+    ),
+    mediaVolumePercent: boundedNumber(
+      record.mediaVolumePercent,
+      0,
+      100,
+      DEFAULT_SETTINGS.mediaVolumePercent,
     ),
     showSameSizeImages:
       typeof record.showSameSizeImages === "boolean"

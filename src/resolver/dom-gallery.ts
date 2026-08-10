@@ -29,6 +29,7 @@ export function discoverDomGallery(
     if (root === primaryImage.ownerDocument.body || root === primaryImage.ownerDocument.documentElement) {
       break;
     }
+    if (root.classList.contains("thread")) break;
 
     const images = collectBoundedImages(root);
     if (images.includes(primaryImage) && images.length >= 2) {

@@ -18,6 +18,20 @@
           Maximum preview size (% of viewport)
           <input id="preview-size" type="number" min="25" max="95" step="5" />
         </label>
+        <label>
+          Hover media volume (%)
+          <input
+            id="media-volume"
+            type="number"
+            min="0"
+            max="100"
+            step="5"
+            aria-describedby="media-volume-help"
+          />
+          <small id="media-volume-help">
+            Applies to video and audio previews. Use 0 to keep previews muted.
+          </small>
+        </label>
         <label class="row">
           <span>Preview same-size images</span>
           <input id="same-size" type="checkbox" />

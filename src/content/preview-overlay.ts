@@ -3,6 +3,7 @@ import {
   DEFAULT_DOWNLOAD_SHORTCUT,
   sanitizeDownloadShortcut,
 } from "../shared/keyboard-shortcut";
+import { DEFAULT_SETTINGS } from "../shared/settings";
 import {
   calculatePlacement,
   type PlacementSide,
@@ -32,6 +33,7 @@ export class PreviewOverlay {
   #preferredSide: PlacementSide | null = null;
   #maxPreviewPercent: number;
   #downloadShortcut: string;
+  #mediaVolumePercent: number;
   #gallery: MediaCandidate[] = [];
   #galleryIndex = 0;
   #requestedGalleryIndex = 0;
@@ -42,9 +44,11 @@ export class PreviewOverlay {
   constructor(
     maxPreviewPercent: number,
     downloadShortcut = DEFAULT_DOWNLOAD_SHORTCUT,
+    mediaVolumePercent = DEFAULT_SETTINGS.mediaVolumePercent,
   ) {
     this.#maxPreviewPercent = maxPreviewPercent;
     this.#downloadShortcut = sanitizeDownloadShortcut(downloadShortcut);
+    this.#mediaVolumePercent = normalizedVolumePercent(mediaVolumePercent);
     this.#host = document.createElement("div");
     this.#host.id = HOST_ID;
     this.#host.setAttribute("aria-hidden", "true");
@@ -59,11 +63,18 @@ export class PreviewOverlay {
     document.documentElement.append(this.#host);
   }
 
-  updateSettings(maxPreviewPercent: number, downloadShortcut = this.#downloadShortcut): void {
+  updateSettings(
+    maxPreviewPercent: number,
+    downloadShortcut = this.#downloadShortcut,
+    mediaVolumePercent = this.#mediaVolumePercent,
+  ): void {
     this.#maxPreviewPercent = maxPreviewPercent;
     this.#downloadShortcut = sanitizeDownloadShortcut(downloadShortcut);
+    this.#mediaVolumePercent = normalizedVolumePercent(mediaVolumePercent);
     const hint = this.#panel.querySelector<HTMLElement>(".download-hint");
     if (hint) hint.textContent = this.#downloadHintText();
+    const media = this.#panel.querySelector(".media-frame > .media");
+    if (media instanceof HTMLMediaElement) this.#startMediaPlayback(media);
     this.#applySizeLimit();
     this.reposition();
   }
@@ -86,6 +97,10 @@ export class PreviewOverlay {
     return !this.#panel.hidden && this.#currentCandidate !== null;
   }
 
+  getVisibleMediaCandidate(): MediaCandidate | null {
+    return !this.#panel.hidden ? this.#currentCandidate : null;
+  }
+
   getVisibleImageUrl(): string | null {
     return !this.#panel.hidden && this.#currentCandidate?.kind === "image"
       ? this.#currentCandidate.url
@@ -101,6 +116,7 @@ export class PreviewOverlay {
   showLoading(): void {
     this.#ensureConnected();
     this.#renderSequence += 1;
+    this.#stopPanelMedia();
     this.#gallery = [];
     this.#galleryIndex = 0;
     this.#requestedGalleryIndex = 0;
@@ -182,6 +198,7 @@ export class PreviewOverlay {
   hide(): void {
     this.#renderSequence += 1;
     this.#discardPrepared();
+    this.#stopPanelMedia();
     this.#gallery = [];
     this.#galleryIndex = 0;
     this.#requestedGalleryIndex = 0;
@@ -235,6 +252,9 @@ export class PreviewOverlay {
     const sequence = ++this.#renderSequence;
     const hasVisibleMedia = this.#panel.querySelector(".media-frame") !== null;
     for (const stalePreloader of this.#panel.querySelectorAll(".preload-bin")) {
+      for (const media of stalePreloader.querySelectorAll<HTMLMediaElement>("audio, video")) {
+        this.#disposeMedia(media);
+      }
       stalePreloader.remove();
     }
     if (!hasVisibleMedia && (this.#panel.hidden || !this.#panel.classList.contains("loading"))) {
@@ -284,6 +304,7 @@ export class PreviewOverlay {
     this.#ensureConnected();
     this.#renderSequence += 1;
     this.#discardPrepared();
+    this.#stopPanelMedia();
     this.#currentCandidate = null;
     this.#panel.style.removeProperty("width");
     this.#panel.replaceChildren(this.#createLoader("Resolving preview"));
@@ -299,6 +320,7 @@ export class PreviewOverlay {
     frame.className = "media-frame";
     media.classList.add("media");
     frame.append(media);
+    this.#stopPanelMedia(media);
     this.#panel.style.removeProperty("width");
     this.#panel.replaceChildren(frame);
     this.#panel.className = "panel";
@@ -307,6 +329,7 @@ export class PreviewOverlay {
     this.#applySizeLimit();
     const metadata = this.#createMetadata(candidate);
     if (metadata) this.#panel.append(metadata);
+    if (media instanceof HTMLMediaElement) this.#startMediaPlayback(media);
     this.reposition();
   }
 
@@ -330,7 +353,7 @@ export class PreviewOverlay {
     let media: HTMLElement;
     if (candidate.kind === "video") {
       const video = document.createElement("video");
-      video.autoplay = true;
+      video.autoplay = false;
       video.loop = true;
       video.muted = true;
       video.playsInline = true;
@@ -342,11 +365,12 @@ export class PreviewOverlay {
       media = video;
     } else if (candidate.kind === "audio") {
       const audio = document.createElement("audio");
-      audio.autoplay = true;
+      audio.autoplay = false;
+      audio.muted = true;
       audio.preload = "metadata";
       audio.controls = true;
       audio.setAttribute("referrerpolicy", "no-referrer");
-      audio.addEventListener("canplay", onReady, { once: true });
+      audio.addEventListener("loadedmetadata", onReady, { once: true });
       audio.addEventListener("error", onError, { once: true });
       audio.src = candidate.url;
       media = audio;
@@ -374,11 +398,83 @@ export class PreviewOverlay {
     const media = this.#prepared?.media;
     this.#prepared = null;
     if (!media) return;
-    media.removeAttribute("src");
     if (media instanceof HTMLMediaElement) {
-      media.pause();
-      media.load();
+      this.#disposeMedia(media);
+    } else {
+      media.removeAttribute("src");
     }
+  }
+
+  #startMediaPlayback(media: HTMLMediaElement): void {
+    const volume = this.#mediaVolumePercent / 100;
+    media.volume = volume;
+    media.muted = volume === 0;
+    this.#clearAudioBlockedStatus();
+
+    let playback: Promise<void>;
+    try {
+      playback = media.play();
+    } catch (error) {
+      this.#handlePlaybackFailure(media, error, volume);
+      return;
+    }
+    void playback.catch((error: unknown) => this.#handlePlaybackFailure(media, error, volume));
+  }
+
+  #handlePlaybackFailure(
+    media: HTMLMediaElement,
+    error: unknown,
+    requestedVolume: number,
+  ): void {
+    if (!this.#isCommittedMedia(media)) return;
+    if (
+      requestedVolume > 0 &&
+      error instanceof DOMException &&
+      error.name === "NotAllowedError"
+    ) {
+      media.muted = true;
+      this.#showAudioBlockedStatus();
+      try {
+        void media.play().catch(() => undefined);
+      } catch {
+        // A failed muted fallback leaves the loaded preview visible but paused.
+      }
+      return;
+    }
+    console.debug("[OpenHoverZoom] Media playback did not start", error);
+  }
+
+  #isCommittedMedia(media: HTMLMediaElement): boolean {
+    return (
+      !this.#panel.hidden &&
+      this.#panel.querySelector(".media-frame > .media") === media
+    );
+  }
+
+  #showAudioBlockedStatus(): void {
+    const metadata = this.#panel.querySelector<HTMLElement>(".metadata");
+    if (!metadata || metadata.querySelector(".audio-status")) return;
+    const status = document.createElement("span");
+    status.className = "audio-status";
+    status.textContent = "Audio blocked";
+    status.title = "Chrome blocked audible autoplay for this site";
+    metadata.prepend(status);
+  }
+
+  #clearAudioBlockedStatus(): void {
+    this.#panel.querySelector(".audio-status")?.remove();
+  }
+
+  #stopPanelMedia(except?: HTMLElement): void {
+    for (const media of this.#panel.querySelectorAll<HTMLMediaElement>("audio, video")) {
+      if (media !== except) this.#disposeMedia(media);
+    }
+  }
+
+  #disposeMedia(media: HTMLMediaElement): void {
+    media.pause();
+    media.removeAttribute("src");
+    media.load();
   }
 
   #createLoader(label: string): HTMLDivElement {
@@ -393,9 +489,7 @@ export class PreviewOverlay {
 
   #createMetadata(candidate: MediaCandidate): HTMLDivElement | null {
     const hasGallery = this.#gallery.length > 1;
-    const canDownload = candidate.kind === "image";
     const captionText = candidate.caption?.replace(/^file:\s*/iu, "").trim();
-    if (!captionText && !hasGallery && !canDownload) return null;
 
     const metadata = document.createElement("div");
     metadata.className = "metadata";
@@ -405,13 +499,11 @@ export class PreviewOverlay {
       caption.textContent = captionText;
       metadata.append(caption);
     }
-    if (canDownload) {
-      const downloadHint = document.createElement("span");
-      downloadHint.className = "download-hint";
-      downloadHint.textContent = this.#downloadHintText();
-      downloadHint.title = "Download this image";
-      metadata.append(downloadHint);
-    }
+    const downloadHint = document.createElement("span");
+    downloadHint.className = "download-hint";
+    downloadHint.textContent = this.#downloadHintText();
+    downloadHint.title = "Download this media";
+    metadata.append(downloadHint);
     if (hasGallery) {
       const status = document.createElement("span");
       status.className = "gallery-status";
@@ -452,6 +544,11 @@ function mediaKey(candidate: MediaCandidate): string {
 function clampIndex(index: number, length: number): number {
   if (!Number.isInteger(index) || length <= 0) return 0;
   return Math.min(length - 1, Math.max(0, index));
+}
+
+function normalizedVolumePercent(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_SETTINGS.mediaVolumePercent;
+  return Math.min(100, Math.max(0, Math.round(value)));
 }
 
 const OVERLAY_CSS = `
@@ -566,6 +663,14 @@ const OVERLAY_CSS = `
     flex: none;
     margin-left: auto;
     color: rgba(246, 247, 249, 0.62);
+    font: 11px/1.35 system-ui, sans-serif;
+    white-space: nowrap;
+  }
+  .audio-status {
+    all: initial;
+    display: block;
+    flex: none;
+    color: rgba(246, 197, 116, 0.78);
     font: 11px/1.35 system-ui, sans-serif;
     white-space: nowrap;
   }

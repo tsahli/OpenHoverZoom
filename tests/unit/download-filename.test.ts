@@ -30,4 +30,17 @@ describe("download filename", () => {
       ),
     ).toBe("ohz_260805_142309.webp");
   });
+
+  it("preserves recognized video and audio extensions", () => {
+    const date = new Date("2026-08-05T14:23:09Z");
+    expect(
+      createDownloadFilename(new URL("https://cdn.example/movie.webm"), date),
+    ).toBe("ohz_260805_142309.webm");
+    expect(
+      createDownloadFilename(new URL("https://cdn.example/media?id=1&format=mp4"), date),
+    ).toBe("ohz_260805_142309.mp4");
+    expect(
+      createDownloadFilename(new URL("https://cdn.example/soundtrack.opus"), date),
+    ).toBe("ohz_260805_142309.opus");
+  });
 });

@@ -174,6 +174,26 @@ describe("DOM resolver", () => {
     );
   });
 
+  it("ranks an explicitly larger video source ahead of the current rendition", () => {
+    const video = document.createElement("video");
+    video.src = "https://cdn.example.test/video-720.mp4";
+    const source = document.createElement("source");
+    source.src = "https://cdn.example.test/video-4k.webm";
+    source.dataset.width = "3840";
+    source.dataset.height = "2160";
+    video.append(source);
+    document.body.append(video);
+
+    const resolution = resolveDomTarget(video, { showSameSizeImages: false });
+
+    expect(resolution.candidates[0]).toMatchObject({
+      url: "https://cdn.example.test/video-4k.webm",
+      kind: "video",
+      width: 3840,
+      height: 2160,
+    });
+  });
+
   it("discovers a detail page from a covering sibling link", () => {
     const tile = document.createElement("div");
     const image = document.createElement("img");
@@ -289,6 +309,32 @@ describe("DOM resolver", () => {
 
     expect(resolution.gallery?.items).toHaveLength(40);
     expect(resolution.gallery?.index).toBe(30);
+  });
+
+  it("does not treat repeated posts inside a thread as a gallery", () => {
+    const thread = document.createElement("div");
+    thread.className = "thread";
+    const images = ["one.jpg", "two.webm", "three.jpg"].map((name) => {
+      const post = document.createElement("div");
+      post.className = "postContainer replyContainer";
+      const link = document.createElement("a");
+      link.href = `https://cdn.example.test/${name}`;
+      const image = document.createElement("img");
+      image.src = `https://cdn.example.test/${name}-thumbnail.jpg`;
+      link.append(image);
+      post.append(link);
+      thread.append(post);
+      return image;
+    });
+    document.body.append(thread);
+
+    const resolution = resolveDomTarget(images[1]!, { showSameSizeImages: true });
+
+    expect(resolution.candidates[0]).toMatchObject({
+      url: "https://cdn.example.test/two.webm",
+      kind: "video",
+    });
+    expect(resolution.gallery).toBeUndefined();
   });
 });
 

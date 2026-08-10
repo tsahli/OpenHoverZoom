@@ -4,7 +4,7 @@ import type { MediaCandidate } from "../../src/resolver/candidate";
 import { DEFAULT_SETTINGS } from "../../src/shared/settings";
 
 const mocks = vi.hoisted(() => ({
-  requestImageDownload: vi.fn(),
+  requestMediaDownload: vi.fn(),
   resolveDownloadCandidate: vi.fn(),
   resolveGalleryCandidate: vi.fn(),
   resolveTarget: vi.fn(),
@@ -16,7 +16,7 @@ vi.mock("../../src/resolver", () => ({
   resolveTarget: mocks.resolveTarget,
 }));
 vi.mock("../../src/content/download-client", () => ({
-  requestImageDownload: mocks.requestImageDownload,
+  requestMediaDownload: mocks.requestMediaDownload,
 }));
 
 import { HoverController } from "../../src/content/hover-controller";
@@ -37,8 +37,8 @@ describe("hover tracking", () => {
     mocks.resolveGalleryCandidate.mockResolvedValue(null);
     mocks.resolveDownloadCandidate.mockReset();
     mocks.resolveDownloadCandidate.mockResolvedValue(null);
-    mocks.requestImageDownload.mockReset();
-    mocks.requestImageDownload.mockResolvedValue(undefined);
+    mocks.requestMediaDownload.mockReset();
+    mocks.requestMediaDownload.mockResolvedValue(undefined);
     mocks.resolveTarget.mockImplementation(async (target: Element) => ({
       candidate: candidateFor(target),
       fallback: null,
@@ -424,7 +424,7 @@ describe("hover tracking", () => {
     expect(overlay.resolveGallerySelection).toHaveBeenCalledWith(selection, null);
   });
 
-  it("downloads the exact visible image only for the configured shortcut", async () => {
+  it("downloads the exact visible media only for the configured shortcut", async () => {
     controller.updateSettings({
       ...DEFAULT_SETTINGS,
       hoverDelayMs: 250,
@@ -433,7 +433,7 @@ describe("hover tracking", () => {
 
     const inactiveEvent = dispatchKey("d", { shiftKey: true });
     expect(inactiveEvent.defaultPrevented).toBe(false);
-    expect(mocks.requestImageDownload).not.toHaveBeenCalled();
+    expect(mocks.requestMediaDownload).not.toHaveBeenCalled();
 
     const image = imageWithId("first");
     dispatchPointer(image, "pointerover", 100, 100);
@@ -441,14 +441,14 @@ describe("hover tracking", () => {
 
     const unrelatedEvent = dispatchKey("Enter");
     expect(unrelatedEvent.defaultPrevented).toBe(false);
-    expect(mocks.requestImageDownload).not.toHaveBeenCalled();
+    expect(mocks.requestMediaDownload).not.toHaveBeenCalled();
 
     const event = dispatchKey("d", { shiftKey: true });
     await Promise.resolve();
 
     expect(event.defaultPrevented).toBe(true);
-    expect(mocks.requestImageDownload).toHaveBeenCalledOnce();
-    expect(mocks.requestImageDownload).toHaveBeenCalledWith(
+    expect(mocks.requestMediaDownload).toHaveBeenCalledOnce();
+    expect(mocks.requestMediaDownload).toHaveBeenCalledWith(
       "https://cdn.example/first.jpg",
     );
   });
@@ -470,7 +470,7 @@ describe("hover tracking", () => {
     };
     overlay.visible = true;
     overlay.mediaVisible = true;
-    overlay.getVisibleImageCandidate.mockReturnValue(preview);
+    overlay.getVisibleMediaCandidate.mockReturnValue(preview);
     mocks.resolveDownloadCandidate.mockResolvedValue(original);
 
     dispatchKey("Enter");
@@ -481,7 +481,38 @@ describe("hover tracking", () => {
       preview,
       expect.any(AbortSignal),
     );
-    expect(mocks.requestImageDownload).toHaveBeenCalledWith(original.url);
+    expect(mocks.requestMediaDownload).toHaveBeenCalledWith(original.url);
+  });
+
+  it("downloads a resolved original video instead of its visible rendition", async () => {
+    const preview: MediaCandidate = {
+      url: "https://cdn.example/preview.webm",
+      kind: "video",
+      source: "video-source",
+      confidence: 92,
+      linkedPageUrl: "https://gallery.example/video/1",
+    };
+    const original: MediaCandidate = {
+      url: "https://cdn.example/original.mp4",
+      kind: "video",
+      source: "document-original-link",
+      confidence: 99,
+      quality: "original",
+    };
+    overlay.visible = true;
+    overlay.mediaVisible = true;
+    overlay.getVisibleMediaCandidate.mockReturnValue(preview);
+    mocks.resolveDownloadCandidate.mockResolvedValue(original);
+
+    dispatchKey("Enter");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mocks.resolveDownloadCandidate).toHaveBeenCalledWith(
+      preview,
+      expect.any(AbortSignal),
+    );
+    expect(mocks.requestMediaDownload).toHaveBeenCalledWith(original.url);
   });
 });
 
@@ -511,7 +542,7 @@ class OverlayDouble {
   resolveGallerySelection = vi.fn<
     (_selection: GallerySelection, _candidate: MediaCandidate | null) => boolean
   >(() => false);
-  getVisibleImageCandidate = vi.fn<() => MediaCandidate | null>(() =>
+  getVisibleMediaCandidate = vi.fn<() => MediaCandidate | null>(() =>
     this.mediaVisible
       ? {
           url: "https://cdn.example/first.jpg",

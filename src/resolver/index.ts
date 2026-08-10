@@ -47,7 +47,9 @@ export async function resolveTarget(
     ? await resolveLinkedDocument(resolution.anchorUrl, signal)
     : [];
   signal.throwIfAborted();
-  const candidate = selectBestCandidate(linked, resolution, options);
+  const candidate =
+    selectBestCandidate(linked, resolution, options) ??
+    activeGalleryCandidate(resolution);
   const fallback = candidate
     ? localCandidates.find((item) => item.url !== candidate.url)
     : undefined;
@@ -55,6 +57,12 @@ export async function resolveTarget(
     candidate,
     fallback: fallback ? attachGallery(fallback, resolution) : null,
   };
+}
+
+function activeGalleryCandidate(resolution: DomResolution): MediaCandidate | null {
+  const gallery = resolution.gallery;
+  const candidate = gallery?.items[gallery.index];
+  return candidate ? attachGallery(candidate, resolution) : null;
 }
 
 export async function resolveGalleryCandidate(

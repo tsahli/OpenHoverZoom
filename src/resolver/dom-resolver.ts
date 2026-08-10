@@ -93,7 +93,9 @@ export function resolveDomTarget(
       caption,
       element === target || element === primaryImage,
     );
-    addBackgroundCandidates(candidates, element, baseUrl, caption);
+    if (element === target) {
+      addBackgroundCandidates(candidates, element, baseUrl, caption);
+    }
   }
 
   const anchor = context.find(

@@ -243,6 +243,42 @@ describe("target resolver", () => {
     ]);
   });
 
+  it("uses the active gallery image when same-size filtering removes local candidates", async () => {
+    const first: MediaCandidate = {
+      url: "https://cdn.example/first.jpg",
+      kind: "image",
+      source: "current-src",
+      confidence: 70,
+    };
+    const second: MediaCandidate = {
+      url: "https://cdn.example/second.jpg",
+      kind: "image",
+      source: "current-src",
+      confidence: 70,
+    };
+    mocks.resolveDomTarget.mockReturnValue({
+      candidates: [],
+      fallbackCandidates: [first],
+      anchorUrl: null,
+      gallery: { items: [first, second], index: 0 },
+    });
+
+    const result = await resolveTarget(
+      document.createElement("img"),
+      { showSameSizeImages: false },
+      new AbortController().signal,
+    );
+
+    expect(result.candidate).toMatchObject({
+      url: "https://cdn.example/first.jpg",
+      galleryIndex: 0,
+    });
+    expect(result.candidate?.gallery?.map((item) => item.url)).toEqual([
+      "https://cdn.example/first.jpg",
+      "https://cdn.example/second.jpg",
+    ]);
+  });
+
   it("resolves a gallery item's detail page to a better image", async () => {
     const thumbnail: MediaCandidate = {
       url: "https://cdn.example/thumbnail.jpg",

@@ -126,7 +126,8 @@ function modifierIsActive(event: ModifierState, modifier: Modifier): boolean {
   return event.metaKey;
 }
 
-function normalizeBaseKey(value: string): string | null {
+function normalizeBaseKey(value: unknown): string | null {
+  if (typeof value !== "string") return null;
   const normalized = value.trim();
   if (/^[a-z0-9]$/iu.test(normalized)) return normalized.toUpperCase();
   if (normalized.toLowerCase() === "enter" || normalized.toLowerCase() === "return") {
@@ -136,7 +137,8 @@ function normalizeBaseKey(value: string): string | null {
   return null;
 }
 
-function normalizeModifier(value: string): Modifier | null {
+function normalizeModifier(value: unknown): Modifier | null {
+  if (typeof value !== "string") return null;
   const normalized = value.toLowerCase();
   if (normalized === "ctrl" || normalized === "control") return "Ctrl";
   if (normalized === "alt" || normalized === "option") return "Alt";

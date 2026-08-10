@@ -65,6 +65,19 @@ describe("settings", () => {
     expect(sanitizePreviewDisableShortcut("control+shift")).toBe("Ctrl+Shift");
   });
 
+  it("ignores synthetic keyboard events without a key", () => {
+    const event = {
+      altKey: false,
+      ctrlKey: false,
+      key: undefined,
+      metaKey: false,
+      shiftKey: false,
+    } as unknown as KeyboardEvent;
+
+    expect(shortcutFromKeyboardEvent(event)).toBeNull();
+    expect(matchesPreviewDisableShortcut(event, "Ctrl")).toBe(false);
+  });
+
   it("resolves shortcut conflicts while allowing Ctrl downloads with another disable key", () => {
     expect(sanitizeSettings({ downloadShortcut: "Ctrl+D" }).downloadShortcut).toBe("Enter");
     expect(

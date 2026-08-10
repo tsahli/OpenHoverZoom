@@ -92,6 +92,32 @@ describe("DOM resolver", () => {
     });
   });
 
+  it("does not treat an ancestor drop shadow as the hovered image", () => {
+    const wrapper = document.createElement("div");
+    wrapper.style.backgroundImage = 'url("/shadow.png")';
+    wrapper.style.backgroundRepeat = "no-repeat";
+    const image = document.createElement("img");
+    image.src = "/photo.jpg";
+    wrapper.append(image);
+    document.body.append(wrapper);
+
+    const visible = resolveDomTarget(image, { showSameSizeImages: true });
+    expect(visible.candidates[0]).toMatchObject({
+      url: "http://localhost:3000/photo.jpg",
+      source: "image-src",
+    });
+    expect(visible.candidates.map((candidate) => candidate.url)).not.toContain(
+      "http://localhost:3000/shadow.png",
+    );
+
+    const suppressed = resolveDomTarget(image, { showSameSizeImages: false });
+    expect(suppressed.candidates).toEqual([]);
+    expect(suppressed.fallbackCandidates[0]).toMatchObject({
+      url: "http://localhost:3000/photo.jpg",
+      source: "image-src",
+    });
+  });
+
   it("does not collect a repeating decorative background", () => {
     const surface = document.createElement("div");
     surface.style.backgroundImage = 'url("/brand-pattern.png")';

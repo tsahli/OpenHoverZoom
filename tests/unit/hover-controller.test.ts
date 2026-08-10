@@ -93,6 +93,72 @@ describe("hover tracking", () => {
     expect(image.title).toBe("Image title");
   });
 
+  it("cancels a pending preview and stays inert while Ctrl is held", async () => {
+    const image = imageWithId("first");
+    image.title = "Image title";
+    dispatchPointer(image, "pointerover", 100, 100);
+    await vi.advanceTimersByTimeAsync(120);
+    expect(overlay.showLoading).toHaveBeenCalledOnce();
+
+    dispatchKey("Control", { ctrlKey: true });
+
+    expect(overlay.hide).toHaveBeenCalledOnce();
+    expect(image.title).toBe("Image title");
+    dispatchPointer(image, "pointermove", 100, 100, null, { ctrlKey: true });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(mocks.resolveTarget).not.toHaveBeenCalled();
+
+    dispatchKeyUp("Control");
+    await vi.advanceTimersByTimeAsync(249);
+    expect(mocks.resolveTarget).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(overlay.show).toHaveBeenCalledOnce();
+  });
+
+  it("immediately hides a visible preview when Ctrl is pressed", async () => {
+    const image = imageWithId("first");
+    dispatchPointer(image, "pointerover", 100, 100);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(overlay.show).toHaveBeenCalledOnce();
+
+    dispatchKey("Control", { ctrlKey: true });
+
+    expect(overlay.hide).toHaveBeenCalledOnce();
+    expect(overlay.visible).toBe(false);
+    expect(dispatchKey("t", { ctrlKey: true }).defaultPrevented).toBe(false);
+  });
+
+  it("immediately hides when Ctrl is pressed while another modifier is held", async () => {
+    const image = imageWithId("first");
+    dispatchPointer(image, "pointerover", 100, 100);
+    await vi.advanceTimersByTimeAsync(250);
+
+    dispatchKey("Shift", { shiftKey: true });
+    expect(overlay.hide).not.toHaveBeenCalled();
+    dispatchKey("Control", { ctrlKey: true, shiftKey: true });
+
+    expect(overlay.hide).toHaveBeenCalledOnce();
+    expect(overlay.visible).toBe(false);
+  });
+
+  it("uses the configured preview disable shortcut instead of Ctrl", async () => {
+    controller.updateSettings({
+      ...DEFAULT_SETTINGS,
+      hoverDelayMs: 250,
+      previewDisableShortcut: "Shift",
+    });
+    const image = imageWithId("first");
+    dispatchPointer(image, "pointerover", 100, 100);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(overlay.show).toHaveBeenCalledOnce();
+
+    dispatchKey("Control", { ctrlKey: true });
+    expect(overlay.hide).not.toHaveBeenCalled();
+
+    dispatchKey("Shift", { shiftKey: true });
+    expect(overlay.hide).toHaveBeenCalledOnce();
+  });
+
   it("re-hit-tests a shared event layer and preserves the old preview during a new hover delay", async () => {
     const layer = document.createElement("div");
     const first = imageWithId("first");
@@ -480,9 +546,10 @@ function dispatchPointer(
   clientX: number,
   clientY: number,
   relatedTarget: EventTarget | null = null,
+  init: MouseEventInit = {},
 ): void {
   target.dispatchEvent(
-    new MouseEvent(type, { bubbles: true, clientX, clientY, relatedTarget }),
+    new MouseEvent(type, { bubbles: true, clientX, clientY, relatedTarget, ...init }),
   );
 }
 
@@ -498,6 +565,17 @@ function dispatchDocumentPointerOut(
 
 function dispatchKey(key: string, init: KeyboardEventInit = {}): KeyboardEvent {
   const event = new KeyboardEvent("keydown", {
+    bubbles: true,
+    cancelable: true,
+    key,
+    ...init,
+  });
+  document.dispatchEvent(event);
+  return event;
+}
+
+function dispatchKeyUp(key: string, init: KeyboardEventInit = {}): KeyboardEvent {
+  const event = new KeyboardEvent("keyup", {
     bubbles: true,
     cancelable: true,
     key,

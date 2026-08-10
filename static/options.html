@@ -23,6 +23,22 @@
           <input id="same-size" type="checkbox" />
         </label>
         <label>
+          Temporarily disable previews shortcut
+          <span class="shortcut-control">
+            <input
+              id="preview-disable-shortcut"
+              type="text"
+              readonly
+              aria-describedby="preview-disable-shortcut-help"
+            />
+            <button id="reset-preview-disable-shortcut" type="button">Use Ctrl</button>
+          </span>
+          <small id="preview-disable-shortcut-help">
+            Click the field and press a key or key combination. Hold it to hide and disable
+            previews.
+          </small>
+        </label>
+        <label>
           Download shortcut
           <span class="shortcut-control">
             <input

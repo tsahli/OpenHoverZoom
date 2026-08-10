@@ -1,6 +1,9 @@
 import {
   DEFAULT_DOWNLOAD_SHORTCUT,
+  DEFAULT_PREVIEW_DISABLE_SHORTCUT,
+  downloadShortcutConflictsWithPreviewDisable,
   sanitizeDownloadShortcut,
+  sanitizePreviewDisableShortcut,
 } from "./keyboard-shortcut";
 
 export interface Settings {
@@ -9,6 +12,7 @@ export interface Settings {
   maxPreviewPercent: number;
   showSameSizeImages: boolean;
   downloadShortcut: string;
+  previewDisableShortcut: string;
   disabledSites: string[];
 }
 
@@ -18,11 +22,22 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = {
   maxPreviewPercent: 85,
   showSameSizeImages: false,
   downloadShortcut: DEFAULT_DOWNLOAD_SHORTCUT,
+  previewDisableShortcut: DEFAULT_PREVIEW_DISABLE_SHORTCUT,
   disabledSites: [],
 };
 
 export function sanitizeSettings(value: unknown): Settings {
   const record = isRecord(value) ? value : {};
+  let downloadShortcut = sanitizeDownloadShortcut(record.downloadShortcut);
+  let previewDisableShortcut = sanitizePreviewDisableShortcut(
+    record.previewDisableShortcut,
+  );
+  if (downloadShortcutConflictsWithPreviewDisable(downloadShortcut, previewDisableShortcut)) {
+    downloadShortcut = DEFAULT_DOWNLOAD_SHORTCUT;
+    if (downloadShortcutConflictsWithPreviewDisable(downloadShortcut, previewDisableShortcut)) {
+      previewDisableShortcut = DEFAULT_PREVIEW_DISABLE_SHORTCUT;
+    }
+  }
   return {
     enabled: typeof record.enabled === "boolean" ? record.enabled : DEFAULT_SETTINGS.enabled,
     hoverDelayMs: boundedNumber(record.hoverDelayMs, 100, 1500, DEFAULT_SETTINGS.hoverDelayMs),
@@ -36,7 +51,8 @@ export function sanitizeSettings(value: unknown): Settings {
       typeof record.showSameSizeImages === "boolean"
         ? record.showSameSizeImages
         : DEFAULT_SETTINGS.showSameSizeImages,
-    downloadShortcut: sanitizeDownloadShortcut(record.downloadShortcut),
+    downloadShortcut,
+    previewDisableShortcut,
     disabledSites: sanitizeSites(record.disabledSites),
   };
 }

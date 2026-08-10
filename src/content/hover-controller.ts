@@ -5,7 +5,12 @@ import {
 } from "../resolver";
 import type { MediaCandidate } from "../resolver/candidate";
 import { isSiteDisabled, type Settings } from "../shared/settings";
-import { matchesDownloadShortcut } from "../shared/keyboard-shortcut";
+import {
+  matchesDownloadShortcut,
+  matchesPreviewDisableModifiers,
+  matchesPreviewDisableShortcut,
+  releasesPreviewDisableShortcut,
+} from "../shared/keyboard-shortcut";
 import { requestImageDownload } from "./download-client";
 import { PreviewOverlay, type GallerySelection } from "./preview-overlay";
 import { findHoverTarget } from "./target-inspector";
@@ -29,6 +34,9 @@ export class HoverController {
   #leaveTimer: number | null = null;
   #request: AbortController | null = null;
   #galleryRequest: AbortController | null = null;
+  #previewDisablePressed = false;
+  #lastPointerTarget: EventTarget | null = null;
+  #lastPointerPoint: TrackedPoint | null = null;
   #titleTarget: Element | null = null;
   #suppressedTitles = new Map<Element, string>();
 
@@ -41,6 +49,7 @@ export class HoverController {
     document.addEventListener("pointerout", this.#onPointerOut, true);
     document.addEventListener("pointermove", this.#onPointerMove, true);
     document.addEventListener("keydown", this.#onKeyDown, true);
+    document.addEventListener("keyup", this.#onKeyUp, true);
     document.addEventListener("visibilitychange", this.#onVisibilityChange);
     window.addEventListener("blur", this.#onWindowBlur);
     window.addEventListener("resize", this.#onViewportChange, { passive: true });
@@ -48,6 +57,9 @@ export class HoverController {
   }
 
   updateSettings(settings: Settings): void {
+    if (settings.previewDisableShortcut !== this.#settings.previewDisableShortcut) {
+      this.#previewDisablePressed = false;
+    }
     this.#settings = settings;
     this.overlay.updateSettings(settings.maxPreviewPercent, settings.downloadShortcut);
     if (!this.#isEnabled()) this.#clearAll();
@@ -58,6 +70,7 @@ export class HoverController {
     document.removeEventListener("pointerout", this.#onPointerOut, true);
     document.removeEventListener("pointermove", this.#onPointerMove, true);
     document.removeEventListener("keydown", this.#onKeyDown, true);
+    document.removeEventListener("keyup", this.#onKeyUp, true);
     document.removeEventListener("visibilitychange", this.#onVisibilityChange);
     window.removeEventListener("blur", this.#onWindowBlur);
     window.removeEventListener("resize", this.#onViewportChange);
@@ -66,22 +79,30 @@ export class HoverController {
   }
 
   #onPointerOver = (event: PointerEvent): void => {
-    this.#trackPointer(event.target, { x: event.clientX, y: event.clientY });
+    this.#trackPointer(event.target, { x: event.clientX, y: event.clientY }, event);
   };
 
   #onPointerOut = (event: PointerEvent): void => {
     // Moving into an iframe can provide the iframe element as relatedTarget,
     // then stop delivering pointer events to this document entirely.
-    this.#trackPointer(event.relatedTarget, { x: event.clientX, y: event.clientY });
+    this.#trackPointer(
+      event.relatedTarget,
+      { x: event.clientX, y: event.clientY },
+      event,
+    );
   };
 
   #onPointerMove = (event: PointerEvent): void => {
-    this.#trackPointer(event.target, { x: event.clientX, y: event.clientY });
+    this.#trackPointer(event.target, { x: event.clientX, y: event.clientY }, event);
   };
 
   #onKeyDown = (event: KeyboardEvent): void => {
     if (event.key === "Escape") {
       this.#clearAll();
+      return;
+    }
+    if (matchesPreviewDisableShortcut(event, this.#settings.previewDisableShortcut)) {
+      this.#beginPreviewDisable();
       return;
     }
     const imageCandidate = this.overlay.getVisibleImageCandidate();
@@ -104,20 +125,64 @@ export class HoverController {
     }
   };
 
-  #onViewportChange = (): void => this.overlay.reposition();
-
-  #onWindowBlur = (): void => this.#clearAll();
-
-  #onVisibilityChange = (): void => {
-    if (document.hidden) this.#clearAll();
+  #onKeyUp = (event: KeyboardEvent): void => {
+    if (releasesPreviewDisableShortcut(event, this.#settings.previewDisableShortcut)) {
+      const wasPreviewDisabled = this.#previewDisablePressed;
+      this.#previewDisablePressed = false;
+      if (wasPreviewDisabled && this.#lastPointerPoint) {
+        this.#trackPointer(
+          this.#currentPointerTarget(this.#lastPointerPoint),
+          this.#lastPointerPoint,
+          event,
+        );
+      }
+    }
   };
 
-  #trackPointer(eventTarget: EventTarget | null, point: TrackedPoint): void {
+  #onViewportChange = (): void => this.overlay.reposition();
+
+  #onWindowBlur = (): void => {
+    this.#previewDisablePressed = false;
+    this.#clearAll();
+  };
+
+  #onVisibilityChange = (): void => {
+    if (document.hidden) {
+      this.#previewDisablePressed = false;
+      this.#clearAll();
+    }
+  };
+
+  #trackPointer(
+    eventTarget: EventTarget | null,
+    point: TrackedPoint,
+    modifiers: Pick<PointerEvent, "altKey" | "ctrlKey" | "metaKey" | "shiftKey">,
+  ): void {
+    this.#lastPointerTarget = eventTarget;
+    this.#lastPointerPoint = point;
+    if (
+      matchesPreviewDisableModifiers(modifiers, this.#settings.previewDisableShortcut)
+    ) {
+      this.#beginPreviewDisable();
+    }
+    if (this.#previewDisablePressed) return;
     if (!this.#isEnabled()) return;
     this.overlay.updatePointer(point.x, point.y);
     const target = findHoverTarget(eventTarget, point);
     this.#syncNativeTitles(eventTarget, target);
     this.#trackTarget(target, point);
+  }
+
+  #currentPointerTarget(point: TrackedPoint): EventTarget | null {
+    return typeof document.elementFromPoint === "function"
+      ? document.elementFromPoint(point.x, point.y)
+      : this.#lastPointerTarget;
+  }
+
+  #beginPreviewDisable(): void {
+    if (this.#previewDisablePressed) return;
+    this.#previewDisablePressed = true;
+    this.#clearAll();
   }
 
   #syncNativeTitles(eventTarget: EventTarget | null, target: Element | null): void {

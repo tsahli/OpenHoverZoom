@@ -23,7 +23,7 @@ await cp(
 const shared = {
   bundle: true,
   legalComments: "none",
-  minify: false,
+  minify: true,
   sourcemap: false,
   target: "chrome120",
   tsconfig: fileURLToPath(new URL("../tsconfig.json", import.meta.url)),

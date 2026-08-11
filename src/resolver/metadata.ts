@@ -21,14 +21,15 @@ export function extractMetadataCandidates(
   documentUrl: string,
 ): MediaCandidate[] {
   const parsed = new DOMParser().parseFromString(html, "text/html");
-  const caption = extractCaption(parsed);
+  const metadata = parsed.querySelectorAll("meta[property], meta[name]");
+  const caption = extractCaption(parsed, metadata);
   const candidates: MediaCandidate[] = [];
   const structuredGalleryUrls: string[] = [];
   let openGraphImage: MediaCandidate | null = null;
   let openGraphVideo: MediaCandidate | null = null;
   let twitterImage: MediaCandidate | null = null;
 
-  for (const meta of parsed.querySelectorAll("meta[property], meta[name]")) {
+  for (const meta of metadata) {
     const key = (meta.getAttribute("property") ?? meta.getAttribute("name") ?? "").toLowerCase();
     const content = meta.getAttribute("content");
     if (!content) continue;
@@ -79,14 +80,21 @@ export function extractMetadataCandidates(
     }
   }
 
-  for (const video of parsed.querySelectorAll("video")) {
-    addHtmlMediaCandidates(candidates, video, documentUrl, "video", caption);
+  const htmlMedia = parsed.querySelectorAll("video, audio");
+  for (const media of htmlMedia) {
+    if (media instanceof HTMLVideoElement) {
+      addHtmlMediaCandidates(candidates, media, documentUrl, "video", caption);
+    }
   }
-  for (const audio of parsed.querySelectorAll("audio")) {
-    addHtmlMediaCandidates(candidates, audio, documentUrl, "audio", caption);
+  for (const media of htmlMedia) {
+    if (media instanceof HTMLAudioElement) {
+      addHtmlMediaCandidates(candidates, media, documentUrl, "audio", caption);
+    }
   }
 
-  for (const link of parsed.querySelectorAll("link[href]")) {
+  const linkedResources = parsed.querySelectorAll("link[href], a[href]");
+  for (const link of linkedResources) {
+    if (!(link instanceof HTMLLinkElement)) continue;
     const relation = new Set((link.getAttribute("rel") ?? "").toLowerCase().split(/\s+/u));
     const href = link.getAttribute("href");
     if (!href) continue;
@@ -107,7 +115,14 @@ export function extractMetadataCandidates(
     }
   }
 
-  for (const element of parsed.querySelectorAll("img[srcset], source[srcset]")) {
+  const imageHints = parsed.querySelectorAll([
+    "img[srcset]",
+    "source[srcset]",
+    ...LAZY_SRCSET_ATTRIBUTES.map((attribute) => `[${attribute}]`),
+    ...FULL_SIZE_ATTRIBUTES.map((attribute) => `[${attribute}]`),
+  ].join(","));
+  for (const element of imageHints) {
+    if (!element.hasAttribute("srcset")) continue;
     const largest = selectLargestSrcset(element.getAttribute("srcset") ?? "");
     if (!largest) continue;
     addCandidate(
@@ -123,7 +138,8 @@ export function extractMetadataCandidates(
   }
 
   for (const attribute of LAZY_SRCSET_ATTRIBUTES) {
-    for (const element of parsed.querySelectorAll(`[${attribute}]`)) {
+    for (const element of imageHints) {
+      if (!element.hasAttribute(attribute)) continue;
       const largest = selectLargestSrcset(element.getAttribute(attribute) ?? "");
       if (!largest) continue;
       addCandidate(
@@ -140,7 +156,7 @@ export function extractMetadataCandidates(
   }
 
   for (const attribute of FULL_SIZE_ATTRIBUTES) {
-    for (const element of parsed.querySelectorAll(`[${attribute}]`)) {
+    for (const element of imageHints) {
       const value = element.getAttribute(attribute);
       if (value) {
         // These attributes can appear on unrelated recommendations or avatars.
@@ -151,7 +167,10 @@ export function extractMetadataCandidates(
     }
   }
 
-  for (const element of parsed.querySelectorAll("a[download][href]")) {
+  for (const element of linkedResources) {
+    if (!(element instanceof HTMLAnchorElement) || !element.hasAttribute("download")) {
+      continue;
+    }
     const href = element.getAttribute("href");
     if (!href) continue;
     const url = normalizeUrl(href, documentUrl);
@@ -160,7 +179,8 @@ export function extractMetadataCandidates(
     if (kind) addCandidate(candidates, url, documentUrl, kind, 94, "responsive", caption);
   }
 
-  for (const element of parsed.querySelectorAll<HTMLAnchorElement>("a[href]")) {
+  for (const element of linkedResources) {
+    if (!(element instanceof HTMLAnchorElement)) continue;
     if (!isExplicitOriginalMediaLink(element)) continue;
     const href = element.getAttribute("href");
     if (!href) continue;
@@ -440,8 +460,11 @@ function isExplicitOriginalMediaLink(element: HTMLAnchorElement): boolean {
   return ORIGINAL_MEDIA_LINK.test(label);
 }
 
-function extractCaption(document: Document): string | undefined {
-  for (const meta of document.querySelectorAll("meta[property], meta[name]")) {
+function extractCaption(
+  document: Document,
+  metadata: NodeListOf<Element>,
+): string | undefined {
+  for (const meta of metadata) {
     const key = (meta.getAttribute("property") ?? meta.getAttribute("name") ?? "").toLowerCase();
     if (key === "og:title" || key === "twitter:title") {
       const content = meta.getAttribute("content")?.trim();

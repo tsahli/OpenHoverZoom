@@ -72,10 +72,9 @@ function collectBoundedImages(root: Element): HTMLImageElement[] {
     }
   }
 
-  return images.sort((left, right) => {
-    if (left === right) return 0;
-    return left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
-  });
+  // The depth-first stack pushes children in reverse, so popped images are
+  // already in document order. Avoid an O(n log n) DOM-position sort here.
+  return images;
 }
 
 function selectGalleryImages(
@@ -105,10 +104,17 @@ function createGallery(
 ): DiscoveredGallery | null {
   const items: MediaCandidate[] = [];
   const indices = new Map<string, number>();
+  const prioritizedLazyAttributes = [...lazyAttributes].sort(
+    (left, right) => lazyPriority(right) - lazyPriority(left),
+  );
   let activeIndex = -1;
 
   for (const image of images) {
-    const localCandidate = candidateForImage(image, baseUrl, lazyAttributes);
+    const localCandidate = candidateForImage(
+      image,
+      baseUrl,
+      prioritizedLazyAttributes,
+    );
     if (!localCandidate) continue;
     const linkedPageUrl = linkedPageForImage?.(image) ?? null;
     const candidate = linkedPageUrl && linkedPageUrl !== localCandidate.url
@@ -182,10 +188,7 @@ function candidateForImage(
     if (candidate) candidates.push(candidate);
   }
 
-  const prioritizedLazyAttributes = [...lazyAttributes].sort(
-    (left, right) => lazyPriority(right) - lazyPriority(left),
-  );
-  for (const attribute of prioritizedLazyAttributes) {
+  for (const attribute of lazyAttributes) {
     const value = image.getAttribute(attribute);
     if (!value) continue;
     const quality = attribute.includes("full") || attribute === "data-original"

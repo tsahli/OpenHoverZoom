@@ -80,11 +80,20 @@ export function selectLargestSrcset(value: string): SrcsetCandidate | null {
   const candidates = parseSrcset(value);
   if (candidates.length === 0) return null;
 
-  return (
-    candidates.sort((left, right) => {
-      const leftScore = left.width ?? (left.density ?? 1) * 10_000;
-      const rightScore = right.width ?? (right.density ?? 1) * 10_000;
-      return rightScore - leftScore;
-    })[0] ?? null
-  );
+  let largest = candidates[0] ?? null;
+  let largestScore = largest ? srcsetScore(largest) : 0;
+  for (let index = 1; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    if (!candidate) continue;
+    const score = srcsetScore(candidate);
+    if (score > largestScore) {
+      largest = candidate;
+      largestScore = score;
+    }
+  }
+  return largest;
+}
+
+function srcsetScore(candidate: SrcsetCandidate): number {
+  return candidate.width ?? (candidate.density ?? 1) * 10_000;
 }

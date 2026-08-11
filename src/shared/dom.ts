@@ -11,10 +11,12 @@ export function* walkBoundedDescendants(
   limits: DescendantWalkLimits,
 ): Generator<Element> {
   const queue = Array.from(root.children, (element) => ({ element, depth: 1 }));
+  let cursor = 0;
   let visited = 0;
 
-  while (queue.length > 0 && visited < limits.maxElements) {
-    const entry = queue.shift();
+  while (cursor < queue.length && visited < limits.maxElements) {
+    const entry = queue[cursor];
+    cursor += 1;
     if (!entry) break;
     visited += 1;
     yield entry.element;

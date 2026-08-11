@@ -60,7 +60,6 @@ export class PreviewOverlay {
     this.#panel.className = "panel";
     this.#panel.hidden = true;
     shadow.append(style, this.#panel);
-    document.documentElement.append(this.#host);
   }
 
   updateSettings(
@@ -75,7 +74,6 @@ export class PreviewOverlay {
     if (hint) hint.textContent = this.#downloadHintText();
     const media = this.#panel.querySelector(".media-frame > .media");
     if (media instanceof HTMLMediaElement) this.#startMediaPlayback(media);
-    this.#applySizeLimit();
     this.reposition();
   }
 
@@ -125,13 +123,13 @@ export class PreviewOverlay {
     this.#panel.replaceChildren(this.#createLoader("Resolving preview"));
     this.#panel.className = "panel loading";
     this.#panel.hidden = false;
-    this.#applySizeLimit();
     this.reposition();
   }
 
   prepare(candidate: MediaCandidate): void {
     const key = mediaKey(candidate);
     if (this.#prepared?.key === key) return;
+    this.#ensureConnected();
     this.#discardPrepared();
     this.#prepared = this.#prepareMedia(candidate);
   }
@@ -310,7 +308,6 @@ export class PreviewOverlay {
     this.#panel.replaceChildren(this.#createLoader("Resolving preview"));
     this.#panel.className = "panel loading";
     this.#panel.hidden = false;
-    this.#applySizeLimit();
     this.reposition();
     this.prepare(fallback);
   }
@@ -326,7 +323,6 @@ export class PreviewOverlay {
     this.#panel.className = "panel";
     this.#panel.hidden = false;
     this.#currentCandidate = candidate;
-    this.#applySizeLimit();
     const metadata = this.#createMetadata(candidate);
     if (metadata) this.#panel.append(metadata);
     if (media instanceof HTMLMediaElement) this.#startMediaPlayback(media);

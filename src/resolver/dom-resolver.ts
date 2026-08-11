@@ -45,10 +45,10 @@ export function resolveDomTarget(
   const associatedMedia = target instanceof HTMLAnchorElement
     ? findAssociatedLinkedMedia(target)
     : null;
-  const initialContext = [
+  const initialContext = uniqueElements([
     ...collectContextElements(target),
     ...(associatedMedia ? collectContextElements(associatedMedia) : []),
-  ].filter((element, index, elements) => elements.indexOf(element) === index);
+  ]);
   const initialImage = initialContext.find(
     (element): element is HTMLImageElement => element instanceof HTMLImageElement,
   );
@@ -56,10 +56,10 @@ export function resolveDomTarget(
     initialImage && !initialContext.some((element) => element instanceof HTMLAnchorElement)
       ? findCoveringSiblingAnchor(initialImage, baseUrl)
       : null;
-  const context = [
+  const context = uniqueElements([
     ...initialContext,
     ...(coveringAnchor ? collectContextElements(coveringAnchor) : []),
-  ].filter((element, index, elements) => elements.indexOf(element) === index);
+  ]);
   const candidates: MediaCandidate[] = [];
   const primaryImage = context.find(
     (element): element is HTMLImageElement => element instanceof HTMLImageElement,
@@ -153,6 +153,10 @@ export function collectContextElements(target: Element): Element[] {
     }
     current = current.parentElement;
   }
+  return [...new Set(elements)];
+}
+
+function uniqueElements(elements: readonly Element[]): Element[] {
   return [...new Set(elements)];
 }
 

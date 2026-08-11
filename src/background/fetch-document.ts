@@ -90,7 +90,7 @@ async function readBoundedText(response: Response, signal: AbortSignal): Promise
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let bytesRead = 0;
-  let text = "";
+  const chunks: string[] = [];
   try {
     while (true) {
       signal.throwIfAborted();
@@ -100,9 +100,10 @@ async function readBoundedText(response: Response, signal: AbortSignal): Promise
       if (bytesRead > MAX_RESPONSE_BYTES) {
         throw new FetchDocumentError("response-too-large");
       }
-      text += decoder.decode(value, { stream: true });
+      chunks.push(decoder.decode(value, { stream: true }));
     }
-    return text + decoder.decode();
+    chunks.push(decoder.decode());
+    return chunks.join("");
   } finally {
     await reader.cancel().catch(() => undefined);
   }

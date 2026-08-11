@@ -24,8 +24,15 @@ interface TrackedPoint {
   y: number;
 }
 
+interface QueuedPointer {
+  eventTarget: EventTarget | null;
+  point: TrackedPoint;
+  modifiers: Pick<PointerEvent, "altKey" | "ctrlKey" | "metaKey" | "shiftKey">;
+}
+
 export class HoverController {
   #settings: Settings;
+  #enabled: boolean;
   #activeTarget: Element | null = null;
   #pendingTarget: Element | null = null;
   #pendingPoint: TrackedPoint | null = null;
@@ -37,6 +44,11 @@ export class HoverController {
   #previewDisablePressed = false;
   #lastPointerTarget: EventTarget | null = null;
   #lastPointerPoint: TrackedPoint | null = null;
+  #lastInspectedTarget: EventTarget | null = null;
+  #lastInspectedPoint: TrackedPoint | null = null;
+  #queuedPointer: QueuedPointer | null = null;
+  #pointerFrame: number | null = null;
+  #viewportFrame: number | null = null;
   #titleTarget: Element | null = null;
   #suppressedTitles = new Map<Element, string>();
 
@@ -45,6 +57,7 @@ export class HoverController {
     settings: Settings,
   ) {
     this.#settings = settings;
+    this.#enabled = settings.enabled && !isSiteDisabled(settings, location.href);
     document.addEventListener("pointerover", this.#onPointerOver, true);
     document.addEventListener("pointerout", this.#onPointerOut, true);
     document.addEventListener("pointermove", this.#onPointerMove, true);
@@ -53,7 +66,6 @@ export class HoverController {
     document.addEventListener("visibilitychange", this.#onVisibilityChange);
     window.addEventListener("blur", this.#onWindowBlur);
     window.addEventListener("resize", this.#onViewportChange, { passive: true });
-    window.addEventListener("scroll", this.#onViewportChange, { capture: true, passive: true });
   }
 
   updateSettings(settings: Settings): void {
@@ -61,6 +73,7 @@ export class HoverController {
       this.#previewDisablePressed = false;
     }
     this.#settings = settings;
+    this.#enabled = settings.enabled && !isSiteDisabled(settings, location.href);
     this.overlay.updateSettings(
       settings.maxPreviewPercent,
       settings.downloadShortcut,
@@ -78,17 +91,18 @@ export class HoverController {
     document.removeEventListener("visibilitychange", this.#onVisibilityChange);
     window.removeEventListener("blur", this.#onWindowBlur);
     window.removeEventListener("resize", this.#onViewportChange);
-    window.removeEventListener("scroll", this.#onViewportChange, true);
     this.#clearAll();
   }
 
   #onPointerOver = (event: PointerEvent): void => {
+    this.#cancelPointerFrame();
     this.#trackPointer(event.target, { x: event.clientX, y: event.clientY }, event);
   };
 
   #onPointerOut = (event: PointerEvent): void => {
     // Moving into an iframe can provide the iframe element as relatedTarget,
     // then stop delivering pointer events to this document entirely.
+    this.#cancelPointerFrame();
     this.#trackPointer(
       event.relatedTarget,
       { x: event.clientX, y: event.clientY },
@@ -97,7 +111,55 @@ export class HoverController {
   };
 
   #onPointerMove = (event: PointerEvent): void => {
-    this.#trackPointer(event.target, { x: event.clientX, y: event.clientY }, event);
+    const eventTarget = event.target;
+    const point = { x: event.clientX, y: event.clientY };
+    this.#lastPointerTarget = eventTarget;
+    this.#lastPointerPoint = point;
+    if (
+      matchesPreviewDisableModifiers(event, this.#settings.previewDisableShortcut)
+    ) {
+      this.#beginPreviewDisable();
+    }
+    if (this.#previewDisablePressed || !this.#isEnabled()) return;
+    this.overlay.updatePointer(point.x, point.y);
+
+    // Once a concrete source owns the hover, pointermove events over that same
+    // element cannot change the result. Avoid repeating the much more expensive
+    // hit testing, style inspection, and bounded DOM walks on every raw event.
+    if (eventTarget === this.#activeTarget || eventTarget === this.#pendingTarget) {
+      this.#cancelPointerFrame();
+      this.#cancelLeaveTimer();
+      this.#lastInspectedTarget = eventTarget;
+      this.#lastInspectedPoint = point;
+      return;
+    }
+
+    // Browser pointer transitions normally arrive through pointerover/out. Keep
+    // direct media transitions synchronous as well so script-dispatched events
+    // and unusual embedded documents do not add a frame of cancellation delay.
+    if (isConcreteMediaElement(eventTarget)) {
+      this.#cancelPointerFrame();
+      this.#trackPointer(eventTarget, point, event);
+      return;
+    }
+
+    // Transparent gallery layers can keep the same event target while the
+    // media underneath changes. They still need coordinate-based hit testing,
+    // but never more than once per rendered frame.
+    this.#queuedPointer = {
+      eventTarget,
+      point,
+      modifiers: pointerModifiers(event),
+    };
+    if (this.#pointerFrame !== null) return;
+    this.#pointerFrame = window.requestAnimationFrame(() => {
+      this.#pointerFrame = null;
+      const queued = this.#queuedPointer;
+      this.#queuedPointer = null;
+      if (queued) {
+        this.#trackPointer(queued.eventTarget, queued.point, queued.modifiers);
+      }
+    });
   };
 
   #onKeyDown = (event: KeyboardEvent): void => {
@@ -143,7 +205,13 @@ export class HoverController {
     }
   };
 
-  #onViewportChange = (): void => this.overlay.reposition();
+  #onViewportChange = (): void => {
+    if (!this.overlay.isVisible() || this.#viewportFrame !== null) return;
+    this.#viewportFrame = window.requestAnimationFrame(() => {
+      this.#viewportFrame = null;
+      if (this.overlay.isVisible()) this.overlay.reposition();
+    });
+  };
 
   #onWindowBlur = (): void => {
     this.#previewDisablePressed = false;
@@ -172,6 +240,15 @@ export class HoverController {
     if (this.#previewDisablePressed) return;
     if (!this.#isEnabled()) return;
     this.overlay.updatePointer(point.x, point.y);
+    if (
+      eventTarget === this.#lastInspectedTarget &&
+      point.x === this.#lastInspectedPoint?.x &&
+      point.y === this.#lastInspectedPoint.y
+    ) {
+      return;
+    }
+    this.#lastInspectedTarget = eventTarget;
+    this.#lastInspectedPoint = point;
     const target = findHoverTarget(eventTarget, point);
     this.#syncNativeTitles(eventTarget, target);
     this.#trackTarget(target, point);
@@ -390,6 +467,10 @@ export class HoverController {
   }
 
   #clearAll(): void {
+    this.#cancelPointerFrame();
+    this.#cancelViewportFrame();
+    this.#lastInspectedTarget = null;
+    this.#lastInspectedPoint = null;
     this.#activeTarget = null;
     this.#cancelPendingTarget();
     this.#cancelLeaveTimer();
@@ -433,11 +514,45 @@ export class HoverController {
     }
   }
 
+  #cancelPointerFrame(): void {
+    if (this.#pointerFrame !== null) {
+      window.cancelAnimationFrame(this.#pointerFrame);
+      this.#pointerFrame = null;
+    }
+    this.#queuedPointer = null;
+  }
+
+  #cancelViewportFrame(): void {
+    if (this.#viewportFrame !== null) {
+      window.cancelAnimationFrame(this.#viewportFrame);
+      this.#viewportFrame = null;
+    }
+  }
+
   #isEnabled(): boolean {
-    return this.#settings.enabled && !isSiteDisabled(this.#settings, location.href);
+    return this.#enabled;
   }
 
   #resolvesSilently(target: Element): boolean {
     return target instanceof HTMLAnchorElement;
   }
+}
+
+function pointerModifiers(
+  event: Pick<PointerEvent, "altKey" | "ctrlKey" | "metaKey" | "shiftKey">,
+): Pick<PointerEvent, "altKey" | "ctrlKey" | "metaKey" | "shiftKey"> {
+  return {
+    altKey: event.altKey,
+    ctrlKey: event.ctrlKey,
+    metaKey: event.metaKey,
+    shiftKey: event.shiftKey,
+  };
+}
+
+function isConcreteMediaElement(target: EventTarget | null): target is Element {
+  return (
+    target instanceof HTMLImageElement ||
+    target instanceof HTMLPictureElement ||
+    target instanceof HTMLVideoElement
+  );
 }

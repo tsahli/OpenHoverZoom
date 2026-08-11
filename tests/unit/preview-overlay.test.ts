@@ -21,6 +21,12 @@ describe("preview overlay", () => {
     loadMedia = vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
   });
 
+  it("does not mutate the page until a preview is requested", () => {
+    new PreviewOverlay(85);
+
+    expect(document.getElementById("open-hover-zoom-host")).toBeNull();
+  });
+
   it("renders a visible loading placeholder", () => {
     const overlay = new PreviewOverlay(85);
     overlay.updatePointer(200, 160);

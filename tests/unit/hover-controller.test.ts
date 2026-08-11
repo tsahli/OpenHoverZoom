@@ -175,6 +175,7 @@ describe("hover tracking", () => {
     expect(overlay.show).toHaveBeenLastCalledWith(expect.objectContaining({ caption: "first" }));
 
     dispatchPointer(layer, "pointermove", 200, 100);
+    await vi.advanceTimersToNextTimerAsync();
     await vi.advanceTimersByTimeAsync(249);
     expect(mocks.resolveTarget).toHaveBeenCalledTimes(1);
     expect(overlay.hide).not.toHaveBeenCalled();
@@ -183,6 +184,62 @@ describe("hover tracking", () => {
     expect(mocks.resolveTarget).toHaveBeenCalledTimes(2);
     expect(overlay.show).toHaveBeenLastCalledWith(expect.objectContaining({ caption: "second" }));
     expect(overlay.hide).not.toHaveBeenCalled();
+  });
+
+  it("coalesces coordinate hit testing for shared event layers per frame", async () => {
+    const layer = document.createElement("div");
+    const image = imageWithId("first");
+    document.body.append(layer);
+    const elementsFromPoint = vi.fn(() => [layer, image]);
+    Object.defineProperty(document, "elementsFromPoint", {
+      configurable: true,
+      value: elementsFromPoint,
+    });
+
+    dispatchPointer(layer, "pointerover", 100, 100);
+    elementsFromPoint.mockClear();
+    dispatchPointer(layer, "pointermove", 110, 100);
+    dispatchPointer(layer, "pointermove", 120, 100);
+    dispatchPointer(layer, "pointermove", 130, 100);
+
+    expect(elementsFromPoint).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(16);
+    expect(elementsFromPoint).toHaveBeenCalledOnce();
+    expect(elementsFromPoint).toHaveBeenCalledWith(130, 100);
+  });
+
+  it("inspects a pointerout and pointerover transition only once", () => {
+    const first = imageWithId("first");
+    const second = imageWithId("second");
+    const layer = document.createElement("div");
+    document.body.append(layer);
+    const elementsFromPoint = vi.fn(() => [layer, second]);
+    Object.defineProperty(document, "elementsFromPoint", {
+      configurable: true,
+      value: elementsFromPoint,
+    });
+
+    dispatchPointer(first, "pointerover", 100, 100);
+    elementsFromPoint.mockClear();
+    dispatchPointer(first, "pointerout", 200, 100, layer);
+    dispatchPointer(layer, "pointerover", 200, 100);
+
+    expect(elementsFromPoint).toHaveBeenCalledOnce();
+  });
+
+  it("coalesces viewport resizing and ignores scroll-only layout work", async () => {
+    window.dispatchEvent(new Event("scroll"));
+    window.dispatchEvent(new Event("resize"));
+    expect(overlay.reposition).not.toHaveBeenCalled();
+
+    overlay.visible = true;
+    window.dispatchEvent(new Event("resize"));
+    window.dispatchEvent(new Event("resize"));
+    window.dispatchEvent(new Event("resize"));
+
+    expect(overlay.reposition).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(16);
+    expect(overlay.reposition).toHaveBeenCalledOnce();
   });
 
   it("uses leave grace and cancels it when the pointer returns", async () => {
@@ -200,6 +257,7 @@ describe("hover tracking", () => {
     expect(overlay.hide).not.toHaveBeenCalled();
 
     dispatchPointer(blank, "pointermove", 300, 300);
+    await vi.advanceTimersToNextTimerAsync();
     await vi.advanceTimersByTimeAsync(160);
     expect(overlay.hide).toHaveBeenCalledOnce();
   });

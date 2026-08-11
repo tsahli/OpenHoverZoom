@@ -55,13 +55,14 @@ export function findHoverTarget(
   if (!(eventTarget instanceof Element)) return null;
   if (isInsideInteractiveUiSurface(eventTarget, pointer)) return null;
 
-  const paths = collectHitPaths(eventTarget, pointer);
+  const hitStack = collectHitStack(eventTarget, pointer);
+  const paths = collectHitPaths(eventTarget, hitStack);
 
   // Prefer concrete media. Many galleries place a transparent link or
   // control layer above a nested image.
   const directMedia = paths.find(isMediaElement);
   if (directMedia) {
-    return pointer && isObscuredByForeground(directMedia, eventTarget, pointer)
+    return pointer && isObscuredByForeground(directMedia, eventTarget, hitStack)
       ? null
       : directMedia;
   }
@@ -69,7 +70,7 @@ export function findHoverTarget(
   for (const element of paths) {
     const media = findBoundedMediaDescendant(element, pointer);
     if (media) {
-      return pointer && isObscuredByForeground(media, eventTarget, pointer)
+      return pointer && isObscuredByForeground(media, eventTarget, hitStack)
         ? null
         : media;
     }
@@ -77,7 +78,7 @@ export function findHoverTarget(
 
   for (const element of paths) {
     if (isSourceCandidate(element)) {
-      return pointer && isObscuredByForeground(element, eventTarget, pointer)
+      return pointer && isObscuredByForeground(element, eventTarget, hitStack)
         ? null
         : element;
     }
@@ -159,20 +160,17 @@ function isMediaDominatedSurface(
 function isObscuredByForeground(
   candidate: Element,
   eventTarget: Element,
-  pointer: PointerPosition,
+  hitStack: readonly Element[],
 ): boolean {
   const interactive = eventTarget.closest(INTERACTIVE_SELECTOR);
   if (interactive && !isAssociatedSurface(interactive, candidate)) return true;
 
-  const elementsFromPoint = eventTarget.ownerDocument.elementsFromPoint?.bind(
-    eventTarget.ownerDocument,
-  );
-  if (!elementsFromPoint) return false;
-  const stack = elementsFromPoint(pointer.x, pointer.y).slice(0, MAX_POINT_STACK);
-  const candidateIndex = stack.findIndex(
+  const candidateIndex = hitStack.findIndex(
     (element) => element === candidate || element.contains(candidate),
   );
-  const foreground = candidateIndex >= 0 ? stack.slice(0, candidateIndex) : stack;
+  const foreground = candidateIndex >= 0
+    ? hitStack.slice(0, candidateIndex)
+    : hitStack;
 
   return foreground.some((element) => {
     if (
@@ -227,16 +225,23 @@ function backgroundAlpha(value: string | undefined): number {
   return Number.isFinite(alpha) ? alpha : 0;
 }
 
-function collectHitPaths(eventTarget: Element, pointer?: PointerPosition): Element[] {
-  const roots: Element[] = [eventTarget];
-  if (pointer) {
-    const elementsFromPoint = eventTarget.ownerDocument.elementsFromPoint?.bind(
-      eventTarget.ownerDocument,
-    );
-    if (elementsFromPoint) {
-      roots.push(...elementsFromPoint(pointer.x, pointer.y).slice(0, MAX_POINT_STACK));
-    }
-  }
+function collectHitStack(
+  eventTarget: Element,
+  pointer?: PointerPosition,
+): Element[] {
+  const elementsFromPoint = eventTarget.ownerDocument.elementsFromPoint?.bind(
+    eventTarget.ownerDocument,
+  );
+  return pointer && elementsFromPoint
+    ? elementsFromPoint(pointer.x, pointer.y).slice(0, MAX_POINT_STACK)
+    : [];
+}
+
+function collectHitPaths(
+  eventTarget: Element,
+  hitStack: readonly Element[],
+): Element[] {
+  const roots: readonly Element[] = [eventTarget, ...hitStack];
 
   const paths: Element[] = [];
   const seen = new Set<Element>();

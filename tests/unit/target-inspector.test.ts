@@ -234,6 +234,44 @@ describe("hover target inspection", () => {
     expect(findHoverTarget(document.body, { x: 100, y: 100 })).toBeNull();
   });
 
+  it("ignores a page-scale decorative image element", () => {
+    const backdrop = document.createElement("img");
+    backdrop.src = "/brand-backdrop.jpg";
+    backdrop.alt = "";
+    backdrop.getBoundingClientRect = () => rectangle(0, 0, 1024, 500);
+    document.body.append(backdrop);
+
+    expect(findHoverTarget(backdrop, { x: 100, y: 100 })).toBeNull();
+  });
+
+  it("ignores a lazy source on a page-scale decorative element", () => {
+    const backdrop = document.createElement("div");
+    backdrop.dataset.src = "/brand-backdrop.jpg";
+    backdrop.getBoundingClientRect = () => rectangle(0, 0, 1024, 500);
+    document.body.append(backdrop);
+
+    expect(findHoverTarget(backdrop, { x: 100, y: 100 })).toBeNull();
+  });
+
+  it("keeps a page-scale image element with explicit media semantics", () => {
+    const image = document.createElement("img");
+    image.src = "/wide-photo.jpg";
+    image.alt = "Wide landscape";
+    image.getBoundingClientRect = () => rectangle(0, 0, 1024, 500);
+    document.body.append(image);
+
+    expect(findHoverTarget(image, { x: 100, y: 100 })).toBe(image);
+  });
+
+  it("ignores a page-scale decorative video element", () => {
+    const backdrop = document.createElement("video");
+    backdrop.src = "/ambient-loop.mp4";
+    backdrop.getBoundingClientRect = () => rectangle(0, 0, 1024, 500);
+    document.body.append(backdrop);
+
+    expect(findHoverTarget(backdrop, { x: 100, y: 100 })).toBeNull();
+  });
+
   it("recognizes an obvious direct media link", () => {
     const anchor = document.createElement("a");
     anchor.href = "https://cdn.example.test/photo.jpg";

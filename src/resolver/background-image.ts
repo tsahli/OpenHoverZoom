@@ -8,10 +8,11 @@ export function extractBackgroundImageUrls(value: string): string[] {
   return urls;
 }
 
-const EXPLICIT_MEDIA_BACKGROUND_SELECTOR = [
+const EXPLICIT_MEDIA_SELECTOR = [
   "a[href]",
   "button",
   "figure",
+  "video[controls]",
   "[role='img']",
   "[itemprop~='image']",
   "[itemtype*='ImageObject']",
@@ -39,7 +40,7 @@ export function extractPreviewableBackgroundImageUrls(element: Element): string[
     const repeat = repeatLayers[index % repeatLayers.length] ?? "repeat";
     return isTiledRepeat(repeat) ? [] : extractBackgroundImageUrls(layer);
   });
-  if (urls.length === 0 || isPageScaleDecoration(element, view)) return [];
+  if (urls.length === 0 || isPageScaleDecoration(element)) return [];
   return urls;
 }
 
@@ -48,8 +49,25 @@ function isTiledRepeat(value: string): boolean {
   return axes.length === 0 || axes.some((axis) => axis !== "no-repeat");
 }
 
-function isPageScaleDecoration(element: Element, view: Window): boolean {
-  if (element.closest(EXPLICIT_MEDIA_BACKGROUND_SELECTOR)) return false;
+/** Returns whether a large surface behaves like ambient page decoration. */
+export function isPageScaleDecoration(element: Element): boolean {
+  if (element.closest(EXPLICIT_MEDIA_SELECTOR)) return false;
+
+  if (
+    element instanceof HTMLImageElement &&
+    element.alt.trim().length > 0
+  ) {
+    return false;
+  }
+  if (
+    element instanceof HTMLPictureElement &&
+    [...element.querySelectorAll("img")].some((image) => image.alt.trim().length > 0)
+  ) {
+    return false;
+  }
+
+  const view = element.ownerDocument.defaultView;
+  if (!view) return false;
 
   const rectangle = element.getBoundingClientRect();
   if (

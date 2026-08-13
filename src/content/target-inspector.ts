@@ -1,4 +1,7 @@
-import { extractPreviewableBackgroundImageUrls } from "../resolver/background-image";
+import {
+  extractPreviewableBackgroundImageUrls,
+  isPageScaleDecoration,
+} from "../resolver/background-image";
 import { LAZY_SOURCE_ATTRIBUTES } from "../resolver/dom-resolver";
 import { mediaKindFromUrl } from "../resolver/media-type";
 import {
@@ -271,14 +274,15 @@ function findBoundedMediaDescendant(
 }
 
 function isMediaElement(element: Element): boolean {
-  return (
+  const isConcreteMedia =
     element instanceof HTMLImageElement ||
     element instanceof HTMLPictureElement ||
-    element instanceof HTMLVideoElement
-  );
+    element instanceof HTMLVideoElement;
+  return isConcreteMedia && !isPageScaleDecoration(element);
 }
 
 function isSourceCandidate(element: Element): boolean {
+  if (isPageScaleDecoration(element)) return false;
   if (
     HOVER_SOURCE_ATTRIBUTES.some((attribute) => element.hasAttribute(attribute))
   ) {

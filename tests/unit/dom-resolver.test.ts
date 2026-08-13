@@ -153,6 +153,40 @@ describe("DOM resolver", () => {
     );
   });
 
+  it("does not collect a page-scale decorative image element", () => {
+    const backdrop = document.createElement("img");
+    backdrop.src = "/brand-backdrop.jpg";
+    backdrop.alt = "";
+    backdrop.getBoundingClientRect = () => rectangle(0, 0, 1024, 500);
+    document.body.append(backdrop);
+
+    expect(resolveDomTarget(backdrop, { showSameSizeImages: true }).candidates).toEqual([]);
+  });
+
+  it("does not collect a lazy source from a page-scale decorative element", () => {
+    const backdrop = document.createElement("div");
+    backdrop.dataset.src = "/brand-backdrop.jpg";
+    backdrop.getBoundingClientRect = () => rectangle(0, 0, 1024, 500);
+    document.body.append(backdrop);
+
+    expect(resolveDomTarget(backdrop, { showSameSizeImages: true }).candidates).toEqual([]);
+  });
+
+  it("keeps a page-scale image element with explicit media semantics", () => {
+    const image = document.createElement("img");
+    image.src = "/wide-photo.jpg";
+    image.alt = "Wide landscape";
+    image.getBoundingClientRect = () => rectangle(0, 0, 1024, 500);
+    document.body.append(image);
+
+    expect(resolveDomTarget(image, { showSameSizeImages: true }).candidates).toContainEqual(
+      expect.objectContaining({
+        url: "http://localhost:3000/wide-photo.jpg",
+        source: "image-src",
+      }),
+    );
+  });
+
   it("collects media nested inside a linked gallery wrapper", () => {
     const anchor = document.createElement("a");
     anchor.href = "/details/photo";

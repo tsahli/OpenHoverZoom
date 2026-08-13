@@ -1,4 +1,7 @@
-import { extractPreviewableBackgroundImageUrls } from "./background-image";
+import {
+  extractPreviewableBackgroundImageUrls,
+  isPageScaleDecoration,
+} from "./background-image";
 import type { MediaCandidate, RenderedSize } from "./candidate";
 import { discoverDomGallery, type DiscoveredGallery } from "./dom-gallery";
 import { mediaKindFromUrl } from "./media-type";
@@ -62,7 +65,8 @@ export function resolveDomTarget(
   ]);
   const candidates: MediaCandidate[] = [];
   const primaryImage = context.find(
-    (element): element is HTMLImageElement => element instanceof HTMLImageElement,
+    (element): element is HTMLImageElement =>
+      element instanceof HTMLImageElement && !isPageScaleDecoration(element),
   );
   const renderedSize = primaryImage ? sizeOf(primaryImage) : undefined;
   const caption = primaryImage?.alt.trim() || undefined;
@@ -76,24 +80,27 @@ export function resolveDomTarget(
     : null;
 
   for (const element of context) {
-    if (element instanceof HTMLImageElement) {
+    const isDecoration = isPageScaleDecoration(element);
+    if (element instanceof HTMLImageElement && !isDecoration) {
       addImageCandidates(candidates, element, baseUrl, caption);
     }
-    if (element instanceof HTMLPictureElement) {
+    if (element instanceof HTMLPictureElement && !isDecoration) {
       addPictureCandidates(candidates, element, baseUrl, caption);
     }
-    if (element instanceof HTMLVideoElement) {
+    if (element instanceof HTMLVideoElement && !isDecoration) {
       addVideoCandidates(candidates, element, baseUrl);
     }
-    addLazySrcsetCandidates(candidates, element, baseUrl, caption);
-    addLazyCandidates(
-      candidates,
-      element,
-      baseUrl,
-      caption,
-      element === target || element === primaryImage,
-    );
-    if (element === target) {
+    if (!isDecoration) {
+      addLazySrcsetCandidates(candidates, element, baseUrl, caption);
+      addLazyCandidates(
+        candidates,
+        element,
+        baseUrl,
+        caption,
+        element === target || element === primaryImage,
+      );
+    }
+    if (element === target && !isDecoration) {
       addBackgroundCandidates(candidates, element, baseUrl, caption);
     }
   }

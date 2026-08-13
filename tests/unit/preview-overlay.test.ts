@@ -61,6 +61,30 @@ describe("preview overlay", () => {
     expect({ left: panel.style.left, top: panel.style.top }).toEqual(initialPosition);
   });
 
+  it("raises visible previews into the browser top layer", () => {
+    const overlay = new PreviewOverlay(85);
+    overlay.prepare(imageCandidate("prepared", "Prepared caption"));
+    const host = document.getElementById("open-hover-zoom-host");
+    if (!host) throw new Error("Preview host was not created");
+    const showPopover = vi.fn();
+    const hidePopover = vi.fn();
+    Object.defineProperties(host, {
+      showPopover: { configurable: true, value: showPopover },
+      hidePopover: { configurable: true, value: hidePopover },
+    });
+
+    overlay.showLoading();
+    expect(host.getAttribute("popover")).toBe("manual");
+    expect(showPopover).toHaveBeenCalledOnce();
+
+    overlay.showLoading();
+    expect(hidePopover).toHaveBeenCalledOnce();
+    expect(showPopover).toHaveBeenCalledTimes(2);
+
+    overlay.hide();
+    expect(hidePopover).toHaveBeenCalledTimes(2);
+  });
+
   it("reuses a concurrently prepared image for the atomic reveal", async () => {
     const candidate = imageCandidate("prepared", "Prepared caption");
     const createElement = vi.spyOn(document, "createElement");

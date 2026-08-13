@@ -7,3 +7,7 @@
   height: 0 !important;
   pointer-events: none !important;
 }
+
+#open-hover-zoom-host::backdrop {
+  display: none !important;
+}

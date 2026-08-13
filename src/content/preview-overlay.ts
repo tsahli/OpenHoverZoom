@@ -28,6 +28,7 @@ export interface GallerySelection {
 export class PreviewOverlay {
   readonly #host: HTMLDivElement;
   readonly #panel: HTMLDivElement;
+  #isInTopLayer = false;
   #anchor: Point = { x: 0, y: 0 };
   #hasAnchor = false;
   #preferredSide: PlacementSide | null = null;
@@ -51,6 +52,7 @@ export class PreviewOverlay {
     this.#mediaVolumePercent = normalizedVolumePercent(mediaVolumePercent);
     this.#host = document.createElement("div");
     this.#host.id = HOST_ID;
+    this.#host.setAttribute("popover", "manual");
     this.#host.setAttribute("aria-hidden", "true");
     this.#host.style.setProperty("pointer-events", "none", "important");
     const shadow = this.#host.attachShadow({ mode: "closed" });
@@ -112,7 +114,7 @@ export class PreviewOverlay {
   }
 
   showLoading(): void {
-    this.#ensureConnected();
+    this.#raiseToTopLayer();
     this.#renderSequence += 1;
     this.#stopPanelMedia();
     this.#gallery = [];
@@ -207,6 +209,7 @@ export class PreviewOverlay {
     this.#panel.hidden = true;
     this.#panel.className = "panel";
     this.#panel.replaceChildren();
+    this.#leaveTopLayer();
   }
 
   reposition(): void {
@@ -246,7 +249,7 @@ export class PreviewOverlay {
     }
     this.#requestedGalleryIndex = index;
 
-    this.#ensureConnected();
+    this.#raiseToTopLayer();
     const sequence = ++this.#renderSequence;
     const hasVisibleMedia = this.#panel.querySelector(".media-frame") !== null;
     for (const stalePreloader of this.#panel.querySelectorAll(".preload-bin")) {
@@ -299,7 +302,7 @@ export class PreviewOverlay {
   }
 
   #showGalleryLoading(fallback: MediaCandidate): void {
-    this.#ensureConnected();
+    this.#raiseToTopLayer();
     this.#renderSequence += 1;
     this.#discardPrepared();
     this.#stopPanelMedia();
@@ -524,7 +527,43 @@ export class PreviewOverlay {
   }
 
   #ensureConnected(): void {
-    if (!this.#host.isConnected) document.documentElement.append(this.#host);
+    if (this.#host.isConnected) return;
+    this.#isInTopLayer = false;
+    document.documentElement.append(this.#host);
+  }
+
+  #raiseToTopLayer(): void {
+    this.#ensureConnected();
+    if (
+      typeof this.#host.showPopover !== "function" ||
+      typeof this.#host.hidePopover !== "function"
+    ) return;
+
+    if (this.#isInTopLayer) {
+      try {
+        this.#host.hidePopover();
+      } catch {
+        // The page may have removed or closed the popover since the last preview.
+      }
+      this.#isInTopLayer = false;
+    }
+
+    try {
+      this.#host.showPopover();
+      this.#isInTopLayer = true;
+    } catch {
+      // The existing high z-index remains a fallback for inactive documents.
+    }
+  }
+
+  #leaveTopLayer(): void {
+    if (!this.#isInTopLayer || typeof this.#host.hidePopover !== "function") return;
+    try {
+      this.#host.hidePopover();
+    } catch {
+      // The popover is already closed or disconnected.
+    }
+    this.#isInTopLayer = false;
   }
 }
 

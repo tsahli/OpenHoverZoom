@@ -8,17 +8,30 @@ export function extractBackgroundImageUrls(value: string): string[] {
   return urls;
 }
 
-const EXPLICIT_MEDIA_SELECTOR = [
-  "a[href]",
-  "button",
+const EXPLICIT_BACKGROUND_MEDIA_SELECTOR = [
   "figure",
-  "video[controls]",
   "[role='img']",
   "[itemprop~='image']",
   "[itemtype*='ImageObject']",
 ].join(",");
+const EXPLICIT_MEDIA_SELECTOR = [
+  "a[href]",
+  "button",
+  "video[controls]",
+  EXPLICIT_BACKGROUND_MEDIA_SELECTOR,
+].join(",");
+const UI_CONTROL_SELECTOR = [
+  "button",
+  "input",
+  "select",
+  "summary",
+  "textarea",
+  "[role='button']",
+  "[role='menuitem']",
+].join(",");
 const LARGE_SURFACE_MIN_AREA_COVERAGE = 0.3;
 const LARGE_SURFACE_MIN_AXIS_COVERAGE = 0.7;
+const MAX_COMPACT_BACKGROUND_AREA = 64 * 64;
 
 /**
  * Returns CSS background URLs that behave like a single media item rather
@@ -27,13 +40,24 @@ const LARGE_SURFACE_MIN_AXIS_COVERAGE = 0.7;
  */
 export function extractPreviewableBackgroundImageUrls(element: Element): string[] {
   const view = element.ownerDocument.defaultView;
-  if (!view || element instanceof HTMLBodyElement || element instanceof HTMLHtmlElement) {
+  if (
+    !view ||
+    element instanceof HTMLBodyElement ||
+    element instanceof HTMLHtmlElement
+  ) {
     return [];
   }
 
   const style = view.getComputedStyle(element);
   const imageLayers = splitCssList(style.backgroundImage);
   if (imageLayers.length === 0) return [];
+  const isExplicitMedia = element.matches(EXPLICIT_BACKGROUND_MEDIA_SELECTOR);
+  if (
+    !isExplicitMedia &&
+    (element.matches(UI_CONTROL_SELECTOR) || isCompactBackgroundSurface(element))
+  ) {
+    return [];
+  }
   const repeatLayers = splitCssList(style.backgroundRepeat);
 
   const urls = imageLayers.flatMap((layer, index) => {
@@ -47,6 +71,15 @@ export function extractPreviewableBackgroundImageUrls(element: Element): string[
 function isTiledRepeat(value: string): boolean {
   const axes = value.trim().toLowerCase().split(/\s+/u);
   return axes.length === 0 || axes.some((axis) => axis !== "no-repeat");
+}
+
+function isCompactBackgroundSurface(element: Element): boolean {
+  const rectangle = element.getBoundingClientRect();
+  return (
+    rectangle.width > 0 &&
+    rectangle.height > 0 &&
+    rectangle.width * rectangle.height <= MAX_COMPACT_BACKGROUND_AREA
+  );
 }
 
 /** Returns whether a large surface behaves like ambient page decoration. */

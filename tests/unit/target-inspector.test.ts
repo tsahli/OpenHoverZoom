@@ -218,6 +218,100 @@ describe("hover target inspection", () => {
     expect(findHoverTarget(thumbnail, { x: 100, y: 100 })).toBe(thumbnail);
   });
 
+  it.each(["0 0", "0 -48px"])(
+    "ignores a compact CSS sprite positioned at %s",
+    (position) => {
+      const play = document.createElement("div");
+      play.className = "expando-button video collapsed";
+      play.style.backgroundImage = 'url("/expando-sprite.png")';
+      play.style.backgroundPosition = position;
+      play.style.backgroundRepeat = "no-repeat";
+      document.body.append(play);
+      vi.spyOn(play, "getBoundingClientRect").mockReturnValue(
+        rectangle(20, 30, 16, 16),
+      );
+
+      expect(findHoverTarget(play, { x: 24, y: 34 })).toBeNull();
+    },
+  );
+
+  it("ignores an elongated compact CSS sprite", () => {
+    const control = document.createElement("div");
+    control.style.backgroundImage = 'url("/toolbar-sprite.png")';
+    control.style.backgroundRepeat = "no-repeat";
+    document.body.append(control);
+    vi.spyOn(control, "getBoundingClientRect").mockReturnValue(
+      rectangle(20, 30, 128, 24),
+    );
+
+    expect(findHoverTarget(control, { x: 40, y: 40 })).toBeNull();
+  });
+
+  it("keeps a large negatively positioned CSS photo previewable", () => {
+    const photo = document.createElement("div");
+    photo.style.backgroundImage = 'url("/wide-photo.jpg")';
+    photo.style.backgroundPosition = "-40px center";
+    photo.style.backgroundRepeat = "no-repeat";
+    document.body.append(photo);
+    vi.spyOn(photo, "getBoundingClientRect").mockReturnValue(
+      rectangle(20, 30, 320, 180),
+    );
+
+    expect(findHoverTarget(photo, { x: 100, y: 100 })).toBe(photo);
+  });
+
+  it("keeps CSS background thumbnails on ordinary links previewable", () => {
+    const thumbnail = document.createElement("a");
+    thumbnail.href = "https://example.test/posts/123";
+    thumbnail.style.backgroundImage = 'url("/photo.jpg")';
+    thumbnail.style.backgroundPosition = "center";
+    thumbnail.style.backgroundRepeat = "no-repeat";
+    document.body.append(thumbnail);
+    vi.spyOn(thumbnail, "getBoundingClientRect").mockReturnValue(
+      rectangle(20, 30, 160, 90),
+    );
+
+    expect(findHoverTarget(thumbnail, { x: 100, y: 100 })).toBe(thumbnail);
+  });
+
+  it("keeps explicit CSS background media inside a control previewable", () => {
+    const button = document.createElement("button");
+    const image = document.createElement("span");
+    image.setAttribute("role", "img");
+    image.style.backgroundImage = 'url("/photo.jpg")';
+    image.style.backgroundRepeat = "no-repeat";
+    button.append(image);
+    document.body.append(button);
+    vi.spyOn(image, "getBoundingClientRect").mockReturnValue(
+      rectangle(20, 30, 32, 32),
+    );
+
+    expect(findHoverTarget(image, { x: 24, y: 34 })).toBe(image);
+  });
+
+  it("keeps a photo-sized CSS background inside a control previewable", () => {
+    const button = document.createElement("button");
+    const thumbnail = document.createElement("span");
+    thumbnail.style.backgroundImage = 'url("/photo.jpg")';
+    thumbnail.style.backgroundRepeat = "no-repeat";
+    button.append(thumbnail);
+    document.body.append(button);
+    vi.spyOn(thumbnail, "getBoundingClientRect").mockReturnValue(
+      rectangle(20, 30, 160, 90),
+    );
+
+    expect(findHoverTarget(thumbnail, { x: 100, y: 60 })).toBe(thumbnail);
+  });
+
+  it("keeps concrete media inside a control previewable", () => {
+    const button = document.createElement("button");
+    const image = document.createElement("img");
+    button.append(image);
+    document.body.append(button);
+
+    expect(findHoverTarget(image, { x: 100, y: 100 })).toBe(image);
+  });
+
   it("ignores a repeating CSS background pattern", () => {
     const backdrop = document.createElement("div");
     backdrop.style.backgroundImage = 'url("/brand-pattern.png")';

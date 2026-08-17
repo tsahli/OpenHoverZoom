@@ -312,6 +312,61 @@ describe("hover target inspection", () => {
     expect(findHoverTarget(image, { x: 100, y: 100 })).toBe(image);
   });
 
+  it("ignores a video that is already playing", () => {
+    const video = document.createElement("video");
+    document.body.append(video);
+    setPlaybackState(video, { paused: false, ended: false });
+
+    expect(findHoverTarget(video, { x: 100, y: 100 })).toBeNull();
+  });
+
+  it("keeps paused and ended videos previewable", () => {
+    const paused = document.createElement("video");
+    const ended = document.createElement("video");
+    document.body.append(paused, ended);
+    setPlaybackState(paused, { paused: true, ended: false });
+    setPlaybackState(ended, { paused: false, ended: true });
+
+    expect(findHoverTarget(paused, { x: 100, y: 100 })).toBe(paused);
+    expect(findHoverTarget(ended, { x: 100, y: 100 })).toBe(ended);
+  });
+
+  it("ignores a playing video beneath a transparent interaction layer", () => {
+    const video = document.createElement("video");
+    const overlay = document.createElement("a");
+    overlay.href = "https://example.test/watch/123";
+    document.body.append(video, overlay);
+    vi.spyOn(video, "getBoundingClientRect").mockReturnValue(
+      rectangle(20, 30, 300, 200),
+    );
+    vi.spyOn(overlay, "getBoundingClientRect").mockReturnValue(
+      rectangle(20, 30, 300, 200),
+    );
+    Object.defineProperty(document, "elementsFromPoint", {
+      configurable: true,
+      value: vi.fn(() => [overlay, video]),
+    });
+
+    setPlaybackState(video, { paused: true, ended: false });
+    expect(findHoverTarget(overlay, { x: 100, y: 100 })).toBe(video);
+
+    setPlaybackState(video, { paused: false, ended: false });
+    expect(findHoverTarget(overlay, { x: 100, y: 100 })).toBeNull();
+  });
+
+  it("allows a foreground image over unrelated playing media", () => {
+    const video = document.createElement("video");
+    const image = document.createElement("img");
+    document.body.append(video, image);
+    setPlaybackState(video, { paused: false, ended: false });
+    Object.defineProperty(document, "elementsFromPoint", {
+      configurable: true,
+      value: vi.fn(() => [image, video]),
+    });
+
+    expect(findHoverTarget(image, { x: 100, y: 100 })).toBe(image);
+  });
+
   it("ignores a repeating CSS background pattern", () => {
     const backdrop = document.createElement("div");
     backdrop.style.backgroundImage = 'url("/brand-pattern.png")';
@@ -418,4 +473,14 @@ function rectangle(left: number, top: number, width: number, height: number): DO
     bottom: top + height,
     toJSON: () => ({}),
   };
+}
+
+function setPlaybackState(
+  media: HTMLMediaElement,
+  state: { paused: boolean; ended: boolean },
+): void {
+  Object.defineProperties(media, {
+    paused: { configurable: true, value: state.paused },
+    ended: { configurable: true, value: state.ended },
+  });
 }

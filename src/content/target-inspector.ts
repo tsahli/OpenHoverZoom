@@ -65,17 +65,19 @@ export function findHoverTarget(
   // control layer above a nested image.
   const directMedia = paths.find(isMediaElement);
   if (directMedia) {
-    return pointer && isObscuredByForeground(directMedia, eventTarget, hitStack)
-      ? null
-      : directMedia;
+    if (pointer && isObscuredByForeground(directMedia, eventTarget, hitStack)) {
+      return null;
+    }
+    return isActivelyPlayingMedia(directMedia) ? null : directMedia;
   }
 
   for (const element of paths) {
     const media = findBoundedMediaDescendant(element, pointer);
     if (media) {
-      return pointer && isObscuredByForeground(media, eventTarget, hitStack)
-        ? null
-        : media;
+      if (pointer && isObscuredByForeground(media, eventTarget, hitStack)) {
+        return null;
+      }
+      return isActivelyPlayingMedia(media) ? null : media;
     }
   }
 
@@ -94,6 +96,14 @@ export function findHoverTarget(
   }
 
   return null;
+}
+
+export function isActivelyPlayingMedia(element: Element): boolean {
+  return (
+    element instanceof HTMLMediaElement &&
+    !element.paused &&
+    !element.ended
+  );
 }
 
 function isInsideInteractiveUiSurface(

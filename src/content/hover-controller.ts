@@ -13,7 +13,10 @@ import {
 } from "../shared/keyboard-shortcut";
 import { requestMediaDownload } from "./download-client";
 import { PreviewOverlay, type GallerySelection } from "./preview-overlay";
-import { findHoverTarget } from "./target-inspector";
+import {
+  findHoverTarget,
+  isActivelyPlayingMedia,
+} from "./target-inspector";
 
 const LOADING_DELAY_MILLISECONDS = 120;
 const LEAVE_GRACE_MILLISECONDS = 160;
@@ -375,6 +378,10 @@ export class HoverController {
     const target = this.#pendingTarget;
     const point = this.#pendingPoint;
     if (!target || !point) return;
+    if (isActivelyPlayingMedia(target)) {
+      this.#clearAll();
+      return;
+    }
     this.#pendingTarget = null;
     this.#pendingPoint = null;
     this.#clearLoadingTimer();
@@ -401,6 +408,10 @@ export class HoverController {
         },
       );
       if (this.#request !== request || request.signal.aborted) return;
+      if (isActivelyPlayingMedia(target)) {
+        this.#clearAll();
+        return;
+      }
       this.#clearLoadingTimer();
       if (resolution.candidate) {
         if (resolution.fallback) {

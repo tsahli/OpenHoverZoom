@@ -73,6 +73,53 @@ describe("hover tracking", () => {
     expect(overlay.hide).not.toHaveBeenCalled();
   });
 
+  it("cancels activation when a video starts playing during the hover delay", async () => {
+    const video = document.createElement("video");
+    let paused = true;
+    Object.defineProperties(video, {
+      paused: { configurable: true, get: () => paused },
+      ended: { configurable: true, value: false },
+    });
+    document.body.append(video);
+
+    dispatchPointer(video, "pointerover", 100, 100);
+    await vi.advanceTimersByTimeAsync(120);
+    expect(overlay.showLoading).toHaveBeenCalledOnce();
+
+    paused = false;
+    await vi.advanceTimersByTimeAsync(130);
+
+    expect(mocks.resolveTarget).not.toHaveBeenCalled();
+    expect(overlay.hide).toHaveBeenCalledOnce();
+  });
+
+  it("cancels activation when a video starts playing during resolution", async () => {
+    const video = document.createElement("video");
+    let paused = true;
+    Object.defineProperties(video, {
+      paused: { configurable: true, get: () => paused },
+      ended: { configurable: true, value: false },
+    });
+    document.body.append(video);
+    let finishResolution: ((resolution: ResolvedTarget) => void) | undefined;
+    mocks.resolveTarget.mockImplementationOnce(
+      () => new Promise<ResolvedTarget>((resolve) => {
+        finishResolution = resolve;
+      }),
+    );
+
+    dispatchPointer(video, "pointerover", 100, 100);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(mocks.resolveTarget).toHaveBeenCalledOnce();
+
+    paused = false;
+    finishResolution?.({ candidate: candidateFor(video), fallback: null });
+    await Promise.resolve();
+
+    expect(overlay.show).not.toHaveBeenCalled();
+    expect(overlay.hide).toHaveBeenCalledOnce();
+  });
+
   it("suppresses native media tooltips only during the active hover", () => {
     const anchor = document.createElement("a");
     anchor.title = "Linked image title";

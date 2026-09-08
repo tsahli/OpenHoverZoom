@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OpenHoverZoom",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Preview and download full-size images, videos, and audio without leaving the page.",
   "minimum_chrome_version": "120",
   "icons": {
@@ -10,17 +10,28 @@
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
   },
-  "permissions": ["downloads", "storage"],
-  "host_permissions": ["<all_urls>"],
+  "permissions": [
+    "downloads",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
-      "css": ["content.css"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
       "run_at": "document_idle",
       "all_frames": true
     }

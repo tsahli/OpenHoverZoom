@@ -14,6 +14,8 @@ in the options.
 
 ## Privacy
 
+Read the [privacy policy](PRIVACY.md).
+
 OpenHoverZoom has no tracking, analytics, accounts, ads, or backend. It does not
 download executable code or remote rules, and settings stay in your browser.
 

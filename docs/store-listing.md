@@ -38,11 +38,13 @@ Remote code: No. All executable code and media-resolution rules are included in 
 
 ## Links
 
+Data usage disclosures: Website content, Web history, and User activity. These describe local processing of page/media URLs, content, pointer position, and shortcut events for the extension's controls. No developer-side collection, history log, or keystroke recording.
+
 Homepage: https://github.com/tsahli/OpenHoverZoom
 
 Support: https://github.com/tsahli/OpenHoverZoom/issues
 
-Privacy policy (publish and verify before submission): https://github.com/tsahli/OpenHoverZoom/blob/main/PRIVACY.md
+Privacy policy: https://github.com/tsahli/OpenHoverZoom/blob/main/PRIVACY.md
 
 ## Reviewer instructions
 
@@ -51,6 +53,6 @@ No account or login is required. Open a Wikimedia Commons image gallery, hover o
 ## Release files
 
 - Extension: release/OpenHoverZoom-1.0.0.zip
-- Screenshot: docs/store/screenshot-1280x800.png
-- Small promotional image: docs/store/promo-440x280.png
+- Screenshot: docs/store/screenshot-1280x800.jpg
+- Small promotional image: docs/store/promo-440x280.jpg
 - Icon: static/icons/icon-128.png

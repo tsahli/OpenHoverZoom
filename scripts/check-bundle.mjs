@@ -1,7 +1,8 @@
 import { readFile, readdir } from "node:fs/promises";
 import { extname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const distDirectory = new URL("../dist/", import.meta.url).pathname;
+const distDirectory = fileURLToPath(new URL("../dist/", import.meta.url));
 const forbidden = [
   { label: "eval", pattern: /\beval\s*\(/u },
   { label: "new Function", pattern: /\bnew\s+Function\s*\(/u },

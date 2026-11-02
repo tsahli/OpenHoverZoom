@@ -1,11 +1,14 @@
-import type { CandidateQuality, MediaCandidate, RenderedSize } from "./candidate";
+import {
+  isDisplayedSource,
+  type CandidateQuality,
+  type MediaCandidate,
+  type RenderedSize,
+} from "./candidate";
 
 export interface ScoreOptions {
   renderedSize?: RenderedSize;
   showSameSizeImages: boolean;
 }
-
-const CURRENT_IMAGE_SOURCES = new Set(["current-src", "image-src"]);
 
 export function rankCandidates(
   candidates: readonly MediaCandidate[],
@@ -73,11 +76,7 @@ function defaultQuality(candidate: MediaCandidate): CandidateQuality {
   ) {
     return "responsive";
   }
-  if (
-    candidate.source === "document-original-link" ||
-    candidate.source === "rewrite-rule" ||
-    candidate.source === "adapter"
-  ) {
+  if (candidate.source === "document-original-link") {
     return "original";
   }
   return "display";
@@ -97,12 +96,16 @@ function isUseful(candidate: MediaCandidate, options: ScoreOptions): boolean {
   if (
     candidate.kind !== "image" ||
     options.showSameSizeImages ||
-    !CURRENT_IMAGE_SOURCES.has(candidate.source)
+    !isDisplayedSource(candidate)
   ) {
     return true;
   }
 
   const rendered = options.renderedSize;
   if (!rendered || !candidate.width || !candidate.height) return false;
-  return candidate.width > rendered.width * 1.1 || candidate.height > rendered.height * 1.1;
+  return isLargerThanRendered({ width: candidate.width, height: candidate.height }, rendered);
+}
+
+export function isLargerThanRendered(actual: RenderedSize, rendered: RenderedSize): boolean {
+  return actual.width > rendered.width * 1.1 || actual.height > rendered.height * 1.1;
 }

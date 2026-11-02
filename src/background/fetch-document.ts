@@ -1,6 +1,6 @@
 import { isHtmlContentType, mediaKindFromContentType } from "../resolver/media-type";
 import type { FetchErrorCode } from "../shared/messages";
-import { validateFetchUrl } from "./validate-url";
+import { isPrivateHost, validateFetchUrl } from "./validate-url";
 
 const MAX_RESPONSE_BYTES = 1_500_000;
 const TIMEOUT_MILLISECONDS = 7_000;
@@ -22,6 +22,7 @@ export class FetchDocumentError extends Error {
 export async function fetchDocument(
   initialUrl: URL,
   externalSignal: AbortSignal,
+  allowPrivate = false,
 ): Promise<FetchedDocument> {
   const timeout = new AbortController();
   const timer = setTimeout(
@@ -51,8 +52,10 @@ export async function fetchDocument(
     }
 
     const finalUrl = validateFetchUrl(response.url || initialUrl.href);
-    if (!finalUrl) {
-      await response.body?.cancel().catch(() => undefined);
+    // Redirects are followed before they can be inspected, so a public page can
+    // still bounce the request to a private address. Discard that response.
+    if (!finalUrl || (!allowPrivate && isPrivateHost(finalUrl.hostname))) {
+      await discardBody(response);
       throw new FetchDocumentError("invalid-url");
     }
 
@@ -62,8 +65,13 @@ export async function fetchDocument(
       contentType,
       status: response.status,
     };
-    if (mediaKindFromContentType(contentType)) return result;
+    // Only the type matters here, and an unread body would hold its connection open.
+    if (mediaKindFromContentType(contentType)) {
+      await discardBody(response);
+      return result;
+    }
     if (!isHtmlContentType(contentType)) {
+      await discardBody(response);
       throw new FetchDocumentError("unsupported-content-type");
     }
     return { ...result, body: await readBoundedText(response, signal) };
@@ -72,13 +80,14 @@ export async function fetchDocument(
   }
 }
 
-async function readBoundedText(response: Response, signal: AbortSignal): Promise<string> {
-  const declaredLength = Number.parseInt(response.headers.get("content-length") ?? "", 10);
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
-    throw new FetchDocumentError("response-too-large");
-  }
-  if (!response.body) return "";
+// Metadata normally sits near the top of a page, so an oversized document is
+// truncated at the limit instead of rejected.
+async function discardBody(response: Response): Promise<void> {
+  await response.body?.cancel().catch(() => undefined);
+}
 
+async function readBoundedText(response: Response, signal: AbortSignal): Promise<string> {
+  if (!response.body) return "";
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let bytesRead = 0;
@@ -88,10 +97,12 @@ async function readBoundedText(response: Response, signal: AbortSignal): Promise
       signal.throwIfAborted();
       const { done, value } = await reader.read();
       if (done) break;
-      bytesRead += value.byteLength;
-      if (bytesRead > MAX_RESPONSE_BYTES) {
-        throw new FetchDocumentError("response-too-large");
+      const remaining = MAX_RESPONSE_BYTES - bytesRead;
+      if (value.byteLength >= remaining) {
+        chunks.push(decoder.decode(value.subarray(0, remaining), { stream: true }));
+        break;
       }
+      bytesRead += value.byteLength;
       chunks.push(decoder.decode(value, { stream: true }));
     }
     chunks.push(decoder.decode());

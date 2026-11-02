@@ -7,20 +7,36 @@ import { isRemoteUrl } from "./url";
 
 const POSITIVE_TTL_MILLISECONDS = 5 * 60_000;
 const NEGATIVE_TTL_MILLISECONDS = 60_000;
-const cache = new LruCache<string, MediaCandidate[] | null>(100);
+const cache = new LruCache<string, LinkedDocument>(100);
+
+export interface LinkedDocument {
+  requestedUrl: string;
+  /** Where redirects ended up, which says whether the page is still about the item. */
+  finalUrl: string;
+  /** The link answered with media rather than a page describing some. */
+  directMedia: boolean;
+  candidates: MediaCandidate[];
+}
 
 export async function resolveLinkedDocument(
   anchorUrl: string,
   signal: AbortSignal,
-): Promise<MediaCandidate[]> {
-  if (!isRemoteUrl(anchorUrl)) return [];
+): Promise<LinkedDocument> {
+  const empty: LinkedDocument = {
+    requestedUrl: anchorUrl,
+    finalUrl: anchorUrl,
+    directMedia: false,
+    candidates: [],
+  };
+  if (!isRemoteUrl(anchorUrl)) return empty;
   const cached = cache.get(anchorUrl);
-  if (cached !== undefined) return cached ?? [];
+  if (cached !== undefined) return cached;
 
   const response = await requestDocument(anchorUrl, signal);
-  if (!response) {
-    cache.set(anchorUrl, null, NEGATIVE_TTL_MILLISECONDS);
-    return [];
+  // An error page describes the error, even when it carries the site's usual metadata.
+  if (!response || response.status >= 400) {
+    cache.set(anchorUrl, empty, NEGATIVE_TTL_MILLISECONDS);
+    return empty;
   }
 
   const directKind = mediaKindFromContentType(response.contentType);
@@ -37,10 +53,16 @@ export async function resolveLinkedDocument(
     : response.body
       ? extractMetadataCandidates(response.body, response.finalUrl)
       : [];
+  const document: LinkedDocument = {
+    requestedUrl: anchorUrl,
+    finalUrl: response.finalUrl,
+    directMedia: directKind !== null,
+    candidates,
+  };
   cache.set(
     anchorUrl,
-    candidates.length > 0 ? candidates : null,
+    document,
     candidates.length > 0 ? POSITIVE_TTL_MILLISECONDS : NEGATIVE_TTL_MILLISECONDS,
   );
-  return candidates;
+  return document;
 }

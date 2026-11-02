@@ -1,21 +1,26 @@
-import {
-  resolveDownloadCandidate,
-  resolveGalleryCandidate,
-  resolveTarget,
-} from "../resolver";
+import { resolveDownloadCandidate, resolveTarget, type PreviewPlan } from "../resolver";
 import type { MediaCandidate } from "../resolver/candidate";
+import {
+  containsAcrossShadow,
+  isEditingKeyEvent,
+  parentAcrossShadow,
+  shadowElementAtPoint,
+} from "../shared/dom";
+import type { DownloadResult } from "../shared/messages";
 import { isSiteDisabled, type Settings } from "../shared/settings";
 import {
+  isModifierOnlyPreviewDisableShortcut,
   matchesDownloadShortcut,
   matchesPreviewDisableModifiers,
   matchesPreviewDisableShortcut,
   releasesPreviewDisableShortcut,
 } from "../shared/keyboard-shortcut";
 import { requestMediaDownload } from "./download-client";
-import { PreviewOverlay, type GallerySelection } from "./preview-overlay";
+import { PreviewOverlay } from "./preview-overlay";
 import {
   findHoverTarget,
   isActivelyPlayingMedia,
+  isTextLinkTarget,
 } from "./target-inspector";
 
 const LOADING_DELAY_MILLISECONDS = 120;
@@ -54,6 +59,13 @@ export class HoverController {
   #viewportFrame: number | null = null;
   #titleTarget: Element | null = null;
   #suppressedTitles = new Map<Element, string>();
+  #downloadsInFlight = new Set<MediaCandidate>();
+  /** The hovered target when it is only a plain link, which is previewed silently. */
+  #hoveredTextLink: Element | null = null;
+  /** A plain link whose page had nothing to show, so hovering it more changes nothing. */
+  #emptyTextLink: Element | null = null;
+  /** Planning walks the DOM, so one hover plans once. */
+  #planned: { target: Element; plan: PreviewPlan } | null = null;
 
   constructor(
     private readonly overlay: PreviewOverlay,
@@ -75,6 +87,7 @@ export class HoverController {
     if (settings.previewDisableShortcut !== this.#settings.previewDisableShortcut) {
       this.#previewDisablePressed = false;
     }
+    const textLinksTurnedOff = this.#settings.previewTextLinks && !settings.previewTextLinks;
     this.#settings = settings;
     this.#enabled = settings.enabled && !isSiteDisabled(settings, location.href);
     this.overlay.updateSettings(
@@ -82,7 +95,7 @@ export class HoverController {
       settings.downloadShortcut,
       settings.mediaVolumePercent,
     );
-    if (!this.#isEnabled()) this.#clearAll();
+    if (!this.#isEnabled() || textLinksTurnedOff) this.#clearAll();
   }
 
   destroy(): void {
@@ -99,22 +112,21 @@ export class HoverController {
 
   #onPointerOver = (event: PointerEvent): void => {
     this.#cancelPointerFrame();
-    this.#trackPointer(event.target, { x: event.clientX, y: event.clientY }, event);
+    this.#trackPointer(eventOrigin(event), { x: event.clientX, y: event.clientY }, event);
   };
 
   #onPointerOut = (event: PointerEvent): void => {
     // Moving into an iframe can provide the iframe element as relatedTarget,
     // then stop delivering pointer events to this document entirely.
     this.#cancelPointerFrame();
-    this.#trackPointer(
-      event.relatedTarget,
-      { x: event.clientX, y: event.clientY },
-      event,
-    );
+    // Outside the document's own tree, relatedTarget is a shadow host when the
+    // pointer moved into a web component, so look at what is under the pointer.
+    const point = { x: event.clientX, y: event.clientY };
+    this.#trackPointer(this.#intoShadowRoots(event.relatedTarget, point), point, event);
   };
 
   #onPointerMove = (event: PointerEvent): void => {
-    const eventTarget = event.target;
+    const eventTarget = eventOrigin(event);
     const point = { x: event.clientX, y: event.clientY };
     this.#lastPointerTarget = eventTarget;
     this.#lastPointerPoint = point;
@@ -129,7 +141,11 @@ export class HoverController {
     // Once a concrete source owns the hover, pointermove events over that same
     // element cannot change the result. Avoid repeating the much more expensive
     // hit testing, style inspection, and bounded DOM walks on every raw event.
-    if (eventTarget === this.#activeTarget || eventTarget === this.#pendingTarget) {
+    if (
+      eventTarget === this.#activeTarget ||
+      eventTarget === this.#pendingTarget ||
+      this.#isInsideTextLink(eventTarget)
+    ) {
       this.#cancelPointerFrame();
       this.#cancelLeaveTimer();
       this.#lastInspectedTarget = eventTarget;
@@ -170,10 +186,17 @@ export class HoverController {
       this.#clearAll();
       return;
     }
-    if (matchesPreviewDisableShortcut(event, this.#settings.previewDisableShortcut)) {
+    // Typing in a chat or post box must never trigger a shortcut. A modifier-only
+    // disable shortcut is harmless there, so it keeps working.
+    const typing = isEditingKeyEvent(event);
+    if (
+      matchesPreviewDisableShortcut(event, this.#settings.previewDisableShortcut) &&
+      (!typing || isModifierOnlyPreviewDisableShortcut(this.#settings.previewDisableShortcut))
+    ) {
       this.#beginPreviewDisable();
       return;
     }
+    if (typing) return;
     const mediaCandidate = this.overlay.getVisibleMediaCandidate();
     if (mediaCandidate && matchesDownloadShortcut(event, this.#settings.downloadShortcut)) {
       event.preventDefault();
@@ -186,11 +209,13 @@ export class HoverController {
       return;
     }
     const direction = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : null;
-    const selection = direction ? this.overlay.navigateGallery(direction) : null;
-    if (selection) {
+    if (!direction) return;
+    const request = new AbortController();
+    if (this.overlay.navigateGallery(direction, request.signal)) {
       event.preventDefault();
       event.stopPropagation();
-      this.#upgradeGallerySelection(selection);
+      this.#cancelGalleryRequest();
+      this.#galleryRequest = request;
     }
   };
 
@@ -252,15 +277,37 @@ export class HoverController {
     }
     this.#lastInspectedTarget = eventTarget;
     this.#lastInspectedPoint = point;
-    const target = findHoverTarget(eventTarget, point);
+    const target = findHoverTarget(eventTarget, point, {
+      textLinks: this.#settings.previewTextLinks,
+    });
+    this.#hoveredTextLink =
+      target && this.#settings.previewTextLinks && isTextLinkTarget(target) ? target : null;
     this.#syncNativeTitles(eventTarget, target);
     this.#trackTarget(target, point);
   }
 
   #currentPointerTarget(point: TrackedPoint): EventTarget | null {
     return typeof document.elementFromPoint === "function"
-      ? document.elementFromPoint(point.x, point.y)
+      ? this.#intoShadowRoots(document.elementFromPoint(point.x, point.y), point)
       : this.#lastPointerTarget;
+  }
+
+  /** Documents report an element in an open shadow root as its host. Finds what is inside. */
+  #intoShadowRoots(target: EventTarget | null, point: TrackedPoint): EventTarget | null {
+    return target instanceof Element && target.shadowRoot
+      ? shadowElementAtPoint(target, point.x, point.y) ?? target
+      : target;
+  }
+
+  /** Moving within the link being previewed cannot change the result, text or not. */
+  #isInsideTextLink(eventTarget: EventTarget | null): boolean {
+    const owner = this.#activeTarget ?? this.#pendingTarget ?? this.#emptyTextLink;
+    return (
+      owner !== null &&
+      owner === this.#hoveredTextLink &&
+      eventTarget instanceof Element &&
+      containsAcrossShadow(owner, eventTarget)
+    );
   }
 
   #beginPreviewDisable(): void {
@@ -278,6 +325,8 @@ export class HoverController {
       this.#restoreNativeTitles();
       this.#titleTarget = target;
     }
+    // A plain link keeps its tooltip, which is all it has, until a preview is shown.
+    if (target === this.#hoveredTextLink) return;
     this.#suppressTitleChain(eventTarget);
     this.#suppressTitleChain(target);
   }
@@ -287,7 +336,7 @@ export class HoverController {
     for (
       let depth = 0;
       current && depth < MAX_TITLE_ANCESTORS;
-      depth += 1, current = current.parentElement
+      depth += 1, current = parentAcrossShadow(current)
     ) {
       const title = current.getAttribute("title");
       if (title === null || title.trim().length === 0) continue;
@@ -307,6 +356,11 @@ export class HoverController {
   }
 
   #trackTarget(target: Element | null, point: TrackedPoint): void {
+    if (target !== this.#emptyTextLink) this.#emptyTextLink = null;
+    if (target && target === this.#emptyTextLink) {
+      this.#cancelLeaveTimer();
+      return;
+    }
     if (target && target === this.#activeTarget) {
       this.#cancelPendingTarget();
       this.#cancelLeaveTimer();
@@ -356,16 +410,15 @@ export class HoverController {
     ) this.overlay.hide();
     this.#pendingTarget = target;
     this.#pendingPoint = point;
-    if (
-      !this.#activeTarget &&
-      !this.overlay.hasVisibleMedia() &&
-      !this.#resolvesSilently(target)
-    ) {
-      this.overlay.setAnchor(point.x, point.y);
+    if (!this.#activeTarget && !this.overlay.hasVisibleMedia()) {
       const loadingDelay = Math.min(LOADING_DELAY_MILLISECONDS, this.#settings.hoverDelayMs);
+      // Decided here rather than up front, so elements the pointer only crosses cost nothing.
       this.#loadingTimer = window.setTimeout(() => {
         this.#loadingTimer = null;
-        if (this.#pendingTarget === target) this.overlay.showLoading();
+        if (this.#pendingTarget === target && !this.#resolvesSilently(target)) {
+          this.overlay.setAnchor(point.x, point.y);
+          this.overlay.showLoading();
+        }
       }, loadingDelay);
     }
     this.#hoverTimer = window.setTimeout(() => {
@@ -391,40 +444,29 @@ export class HoverController {
     if (!this.#resolvesSilently(target)) {
       this.overlay.showLoading();
     }
-    void this.#resolve(target);
+    void this.#resolve(target, target === this.#hoveredTextLink);
   }
 
-  async #resolve(target: Element): Promise<void> {
+  async #resolve(target: Element, textLink: boolean): Promise<void> {
     const request = new AbortController();
     this.#request = request;
 
     try {
-      const resolution = await resolveTarget(
-        target,
-        { showSameSizeImages: this.#settings.showSameSizeImages },
-        request.signal,
-        {
-          onFallbackCandidate: (fallback) => this.overlay.prepare(fallback),
-        },
-      );
+      const plan = this.#planFor(target);
+      this.#planned = null;
+      const outcome = await this.overlay.show(plan, request.signal);
       if (this.#request !== request || request.signal.aborted) return;
-      if (isActivelyPlayingMedia(target)) {
+      if (outcome === "cancelled") return;
+      if (outcome === "accepted" && textLink) this.#suppressTitleChain(target);
+      if (outcome === "accepted" && isActivelyPlayingMedia(target)) {
         this.#clearAll();
         return;
       }
-      this.#clearLoadingTimer();
-      if (resolution.candidate) {
-        if (resolution.fallback) {
-          this.overlay.show(resolution.candidate, resolution.fallback);
-        } else {
-          this.overlay.show(resolution.candidate);
-        }
-      }
-      else {
+      if (outcome === "none") {
+        if (textLink) this.#emptyTextLink = target;
         this.#activeTarget = null;
         this.#restoreNativeTitles();
         this.overlay.hide();
-        return;
       }
     } catch (error) {
       if (this.#request !== request || request.signal.aborted) return;
@@ -440,31 +482,20 @@ export class HoverController {
     }
   }
 
-  #upgradeGallerySelection(selection: GallerySelection): void {
-    this.#cancelGalleryRequest();
-    if (!selection.candidate.linkedPageUrl) return;
-    const request = new AbortController();
-    this.#galleryRequest = request;
-    void resolveGalleryCandidate(selection.candidate, request.signal)
-      .then((candidate) => {
-        if (this.#galleryRequest === request && !request.signal.aborted) {
-          this.overlay.resolveGallerySelection(selection, candidate);
-        }
-      })
-      .catch((error: unknown) => {
-        if (!(error instanceof DOMException && error.name === "AbortError")) {
-          console.warn("[OpenHoverZoom] Gallery item upgrade failed", error);
-          if (this.#galleryRequest === request && !request.signal.aborted) {
-            this.overlay.resolveGallerySelection(selection, null);
-          }
-        }
-      })
-      .finally(() => {
-        if (this.#galleryRequest === request) this.#galleryRequest = null;
-      });
+  async #downloadMedia(candidate: MediaCandidate): Promise<void> {
+    // The status in the metadata bar says it is under way, so a second press adds nothing.
+    if (this.#downloadsInFlight.has(candidate)) return;
+    this.#downloadsInFlight.add(candidate);
+    const result = this.#saveMedia(candidate);
+    this.overlay.trackDownload(candidate, result);
+    try {
+      await result;
+    } finally {
+      this.#downloadsInFlight.delete(candidate);
+    }
   }
 
-  async #downloadMedia(candidate: MediaCandidate): Promise<void> {
+  async #saveMedia(candidate: MediaCandidate): Promise<DownloadResult> {
     let downloadCandidate = candidate;
     if (candidate.linkedPageUrl) {
       try {
@@ -474,7 +505,7 @@ export class HoverController {
         console.warn("[OpenHoverZoom] Original media lookup failed", error);
       }
     }
-    await requestMediaDownload(downloadCandidate.url);
+    return requestMediaDownload(downloadCandidate.url);
   }
 
   #clearAll(): void {
@@ -482,6 +513,8 @@ export class HoverController {
     this.#cancelViewportFrame();
     this.#lastInspectedTarget = null;
     this.#lastInspectedPoint = null;
+    this.#hoveredTextLink = null;
+    this.#emptyTextLink = null;
     this.#activeTarget = null;
     this.#cancelPendingTarget();
     this.#cancelLeaveTimer();
@@ -498,6 +531,7 @@ export class HoverController {
     }
     this.#pendingTarget = null;
     this.#pendingPoint = null;
+    this.#planned = null;
     this.#clearLoadingTimer();
   }
 
@@ -545,8 +579,32 @@ export class HoverController {
   }
 
   #resolvesSilently(target: Element): boolean {
-    return target instanceof HTMLAnchorElement;
+    return target instanceof HTMLAnchorElement || this.#planFor(target).quiet;
   }
+
+  #planFor(target: Element): PreviewPlan {
+    if (this.#planned?.target !== target) {
+      this.#planned = {
+        target,
+        plan: resolveTarget(target, {
+          showSameSizeImages: this.#settings.showSameSizeImages,
+          textLink: target === this.#hoveredTextLink,
+        }),
+      };
+    }
+    return this.#planned.plan;
+  }
+}
+
+/**
+ * The element the pointer is really over. A document listener sees an element in an
+ * open shadow root as its host, so look at the full event path instead.
+ */
+function eventOrigin(event: Event): EventTarget | null {
+  const target = event.target;
+  return target instanceof Element && target.shadowRoot
+    ? event.composedPath()[0] ?? target
+    : target;
 }
 
 function pointerModifiers(

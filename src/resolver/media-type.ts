@@ -38,8 +38,13 @@ export function mediaKindFromUrl(value: string): MediaKind | null {
   }
 }
 
+/** The type itself, without parameters such as a charset. */
+export function contentTypeEssence(value: string): string {
+  return value.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+}
+
 export function mediaKindFromContentType(value: string): MediaKind | null {
-  const essence = value.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  const essence = contentTypeEssence(value);
   if (essence.startsWith("image/")) return "image";
   if (essence.startsWith("video/")) return "video";
   if (essence.startsWith("audio/")) return "audio";
@@ -47,6 +52,6 @@ export function mediaKindFromContentType(value: string): MediaKind | null {
 }
 
 export function isHtmlContentType(value: string): boolean {
-  const essence = value.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  const essence = contentTypeEssence(value);
   return essence === "text/html" || essence === "application/xhtml+xml";
 }

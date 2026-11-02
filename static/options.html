@@ -36,6 +36,15 @@
           <span>Preview same-size images</span>
           <input id="same-size" type="checkbox" />
         </label>
+        <label class="row">
+          <span>Preview plain links</span>
+          <input id="text-links" type="checkbox" aria-describedby="text-links-help" />
+        </label>
+        <small id="text-links-help">
+          Off by default. When on, hovering a link that has no image looks up the linked
+          page and previews its main image or video if it has one. The page is requested
+          without cookies, so every link you rest the pointer on contacts that site.
+        </small>
         <label>
           Temporarily disable previews shortcut
           <span class="shortcut-control">

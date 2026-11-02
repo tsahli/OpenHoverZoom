@@ -14,7 +14,10 @@ const MAX_JSON_LD_VALUES = 1_000;
 const FULL_SIZE_ATTRIBUTES = ["data-original", "data-full", "data-full-src"] as const;
 const LAZY_SRCSET_ATTRIBUTES = ["data-srcset", "data-lazy-srcset"] as const;
 const PRIMARY_MEDIA_KEYS = new Set(["audio", "image", "video"]);
-const ORIGINAL_MEDIA_LINK = /\boriginal(?:\s+(?:file|image|media|resolution|size))?\b/iu;
+// The whole label must be little more than "original", so prose that merely
+// mentions the word (for example a post title) is not mistaken for the media link.
+const ORIGINAL_MEDIA_LINK =
+  /^(?:(?:view|download|open|get|see)\s+)?(?:the\s+)?original(?:\s+(?:file|image|media|photo|picture|resolution|size|version))?$/iu;
 
 export function extractMetadataCandidates(
   html: string,
@@ -452,12 +455,15 @@ function jsonLdTypes(value: unknown): string[] {
 function isExplicitOriginalMediaLink(element: HTMLAnchorElement): boolean {
   const relation = new Set((element.getAttribute("rel") ?? "").toLowerCase().split(/\s+/u));
   if (relation.has("enclosure") || relation.has("original")) return true;
-  const label = [
+  return [
     element.textContent ?? "",
     element.getAttribute("aria-label") ?? "",
     element.getAttribute("title") ?? "",
-  ].join(" ");
-  return ORIGINAL_MEDIA_LINK.test(label);
+  ].some((label) => ORIGINAL_MEDIA_LINK.test(normalizeLinkLabel(label)));
+}
+
+function normalizeLinkLabel(label: string): string {
+  return label.replace(/\s+/gu, " ").replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
 }
 
 function extractCaption(

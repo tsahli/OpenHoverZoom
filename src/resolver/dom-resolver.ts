@@ -2,14 +2,22 @@ import {
   extractPreviewableBackgroundImageUrls,
   isPageScaleDecoration,
 } from "./background-image";
-import type { MediaCandidate, RenderedSize } from "./candidate";
-import { discoverDomGallery, type DiscoveredGallery } from "./dom-gallery";
+import type { MediaCandidate, RenderedSize, ThumbnailReference } from "./candidate";
+import { discoverDomGallery, thumbnailForImage, type DiscoveredGallery } from "./dom-gallery";
 import { mediaKindFromUrl } from "./media-type";
-import { applyRewriteRules } from "./rewrite-rules";
 import { rankCandidates } from "./score-candidates";
 import { selectLargestSrcset } from "./srcset";
 import { normalizeUrl } from "./url";
-import { comparableAreaOverlap, walkBoundedDescendants } from "../shared/dom";
+import {
+  closestAcrossShadow,
+  comparableAreaOverlap,
+  containsAcrossShadow,
+  containsRect,
+  isCrossOriginFrame,
+  isSmallMedia,
+  parentAcrossShadow,
+  walkBoundedDescendants,
+} from "../shared/dom";
 
 export const LAZY_SOURCE_ATTRIBUTES = [
   "data-src",
@@ -26,12 +34,20 @@ const LAZY_SRCSET_ATTRIBUTES = ["data-srcset", "data-lazy-srcset"] as const;
 const MAX_CONTEXT_DEPTH = 5;
 const CONTEXT_DESCENDANT_WALK = { maxDepth: 4, maxElements: 32 } as const;
 const MIN_COVERING_LINK_OVERLAP = 0.75;
+/** Images stacked this closely, such as a placeholder and its photo, show one picture. */
+const MIN_STACKED_IMAGE_OVERLAP = 0.75;
 
 export interface DomResolution {
   candidates: MediaCandidate[];
   fallbackCandidates: MediaCandidate[];
   anchorUrl: string | null;
+  /** The anchor's page may be fetched. See `mayFetchLinkedPage`. */
+  lookupAllowed: boolean;
+  /** The hovered media is an icon or avatar too small to justify a page lookup. */
+  smallMedia: boolean;
   renderedSize?: RenderedSize;
+  /** What the page displays for the hovered image, which guesses must beat. */
+  thumbnail?: ThumbnailReference;
   gallery?: DiscoveredGallery;
 }
 
@@ -55,8 +71,10 @@ export function resolveDomTarget(
   const initialImage = initialContext.find(
     (element): element is HTMLImageElement => element instanceof HTMLImageElement,
   );
+  // The link around a card can sit further up than the context reaches.
+  const enclosingAnchor = closestAcrossShadow(initialImage ?? target, "a[href]");
   const coveringAnchor =
-    initialImage && !initialContext.some((element) => element instanceof HTMLAnchorElement)
+    initialImage && !enclosingAnchor
       ? findCoveringSiblingAnchor(initialImage, baseUrl)
       : null;
   const context = uniqueElements([
@@ -66,7 +84,9 @@ export function resolveDomTarget(
   const candidates: MediaCandidate[] = [];
   const primaryImage = context.find(
     (element): element is HTMLImageElement =>
-      element instanceof HTMLImageElement && !isPageScaleDecoration(element),
+      element instanceof HTMLImageElement &&
+      !isPageScaleDecoration(element) &&
+      !isSeparatePicture(element, associatedMedia ?? target),
   );
   const renderedSize = primaryImage ? sizeOf(primaryImage) : undefined;
   const caption = primaryImage?.alt.trim() || undefined;
@@ -80,6 +100,8 @@ export function resolveDomTarget(
     : null;
 
   for (const element of context) {
+    // A link can hold several pictures, and only the hovered one speaks for this hover.
+    if (isSeparatePicture(element, primaryImage ?? associatedMedia ?? target)) continue;
     const isDecoration = isPageScaleDecoration(element);
     if (element instanceof HTMLImageElement && !isDecoration) {
       addImageCandidates(candidates, element, baseUrl, caption);
@@ -105,9 +127,10 @@ export function resolveDomTarget(
     }
   }
 
-  const anchor = context.find(
-    (element): element is HTMLAnchorElement => element instanceof HTMLAnchorElement,
-  );
+  const anchor =
+    context.find(
+      (element): element is HTMLAnchorElement => element instanceof HTMLAnchorElement,
+    ) ?? (enclosingAnchor instanceof HTMLAnchorElement ? enclosingAnchor : null);
   const anchorUrl = anchor ? normalizeUrl(anchor.href, baseUrl) : null;
   if (anchorUrl) {
     const kind = mediaKindFromUrl(anchorUrl);
@@ -126,28 +149,49 @@ export function resolveDomTarget(
     }
   }
 
-  const rewritten = candidates.flatMap((candidate) =>
-    applyRewriteRules(candidate, {
-      pageUrl: document.location.href,
-      target: candidate.source === "direct-link" ? "link" : "image",
-    }),
-  );
   const rankOptions = {
     showSameSizeImages: options.showSameSizeImages,
     ...(renderedSize ? { renderedSize } : {}),
   };
-  const allCandidates = [...rewritten, ...candidates];
+  const thumbnail = primaryImage ? thumbnailForImage(primaryImage, baseUrl) : undefined;
 
   return {
-    candidates: rankCandidates(allCandidates, rankOptions),
-    fallbackCandidates: rankCandidates(allCandidates, {
+    candidates: rankCandidates(candidates, rankOptions),
+    fallbackCandidates: rankCandidates(candidates, {
       ...rankOptions,
       showSameSizeImages: true,
     }).filter((candidate) => candidate.source !== "direct-link"),
     anchorUrl,
+    lookupAllowed: anchor ? mayFetchLinkedPage(anchor) : false,
+    // A short text link is not an icon, and only its size says otherwise.
+    smallMedia: primaryImage
+      ? isSmallMedia(primaryImage)
+      : !(target instanceof HTMLAnchorElement) && isSmallMedia(target),
     ...(renderedSize ? { renderedSize } : {}),
+    ...(thumbnail ? { thumbnail } : {}),
     ...(gallery ? { gallery } : {}),
   };
+}
+
+function isSeparatePicture(element: Element, reference: Element): boolean {
+  // A link or picture speaks for the images it holds.
+  if (
+    (reference instanceof HTMLAnchorElement || reference instanceof HTMLPictureElement) &&
+    containsAcrossShadow(reference, element)
+  ) {
+    return false;
+  }
+  const image =
+    element instanceof HTMLImageElement
+      ? element
+      : element instanceof HTMLPictureElement
+        ? element.querySelector("img")
+        : null;
+  return (
+    image !== null &&
+    image !== reference &&
+    comparableAreaOverlap(image, reference) < MIN_STACKED_IMAGE_OVERLAP
+  );
 }
 
 export function collectContextElements(target: Element): Element[] {
@@ -158,7 +202,7 @@ export function collectContextElements(target: Element): Element[] {
     if (current instanceof HTMLPictureElement || current instanceof HTMLAnchorElement) {
       elements.push(...walkBoundedDescendants(current, CONTEXT_DESCENDANT_WALK));
     }
-    current = current.parentElement;
+    current = parentAcrossShadow(current);
   }
   return [...new Set(elements)];
 }
@@ -167,11 +211,21 @@ function uniqueElements(elements: readonly Element[]): Element[] {
   return [...new Set(elements)];
 }
 
+/** False for links that declare sponsorship or tracking, and from ad iframes. */
+export function mayFetchLinkedPage(anchor: HTMLAnchorElement): boolean {
+  return !(
+    anchor.relList.contains("sponsored") ||
+    anchor.hasAttribute("ping") ||
+    anchor.hasAttribute("attributionsrc") ||
+    isCrossOriginFrame()
+  );
+}
+
 function findAssociatedLinkedMedia(anchor: HTMLAnchorElement): Element | null {
   const href = anchor.href;
   if (!href) return null;
 
-  let root = anchor.parentElement;
+  let root = parentAcrossShadow(anchor);
   for (let depth = 0; root && depth < MAX_CONTEXT_DEPTH; depth += 1) {
     for (const element of walkBoundedDescendants(root, CONTEXT_DESCENDANT_WALK)) {
       if (
@@ -188,7 +242,7 @@ function findAssociatedLinkedMedia(anchor: HTMLAnchorElement): Element | null {
         if (media) return media;
       }
     }
-    root = root.parentElement;
+    root = parentAcrossShadow(root);
   }
   return null;
 }
@@ -199,13 +253,13 @@ function findCoveringSiblingAnchor(
 ): HTMLAnchorElement | null {
   const seen = new Set<HTMLAnchorElement>();
   let best: { anchor: HTMLAnchorElement; score: number } | null = null;
-  let root = image.parentElement;
+  let root = parentAcrossShadow(image);
 
   for (let depth = 0; root && depth < MAX_CONTEXT_DEPTH; depth += 1) {
     for (const element of walkBoundedDescendants(root, CONTEXT_DESCENDANT_WALK)) {
       if (
         !(element instanceof HTMLAnchorElement) ||
-        element.contains(image) ||
+        containsAcrossShadow(element, image) ||
         seen.has(element)
       ) {
         continue;
@@ -221,21 +275,37 @@ function findCoveringSiblingAnchor(
       }
     }
     if (best?.score === 1) break;
-    root = root.parentElement;
+    root = parentAcrossShadow(root);
   }
   return best?.anchor ?? null;
 }
 
+// Gallery items answer to the same limits as a hovered image: no page lookups for
+// icons, for links that declare tracking, or from ad iframes.
 function findLinkedPageUrl(image: HTMLImageElement, baseUrl: string): string | null {
-  const ancestor = image.closest<HTMLAnchorElement>("a[href]");
-  const anchor = ancestor ?? findCoveringSiblingAnchor(image, baseUrl);
-  if (!anchor) return null;
+  if (isSmallMedia(image)) return null;
+  const ancestor = closestAcrossShadow(image, "a[href]");
+  const anchor =
+    (ancestor instanceof HTMLAnchorElement ? ancestor : null) ??
+    findCoveringSiblingAnchor(image, baseUrl);
+  if (!anchor || !mayFetchLinkedPage(anchor)) return null;
   const normalized = normalizeUrl(anchor.href, baseUrl);
   return normalized === image.ownerDocument.location.href ? null : normalized;
 }
 
 function coveringLinkScore(anchor: Element, image: Element): number {
-  return comparableAreaOverlap(anchor, image);
+  return isStretchedOverImage(anchor, image) ? 1 : comparableAreaOverlap(anchor, image);
+}
+
+// An empty link stretched across a card makes all of it clickable, picture included.
+function isStretchedOverImage(anchor: Element, image: Element): boolean {
+  if (!containsRect(anchor, image)) return false;
+  const { left, top, width, height } = image.getBoundingClientRect();
+  // The document only reports a shadow tree's host, so ask the tree holding the link.
+  const root = anchor.getRootNode();
+  const scope = root instanceof ShadowRoot ? root : image.ownerDocument;
+  const topmost = scope.elementFromPoint(left + width / 2, top + height / 2);
+  return topmost === anchor;
 }
 
 function addImageCandidates(

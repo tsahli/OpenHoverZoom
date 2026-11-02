@@ -14,6 +14,18 @@ export interface DownloadMediaRequest {
   url: string;
 }
 
+/**
+ * How a download ended up, as far as the worker could tell. `complete` means Chrome
+ * finished writing the file. `started` means it began but had not finished when the
+ * worker stopped waiting, so the outcome is unknown. `failed` means it never began or
+ * was interrupted.
+ */
+export type DownloadResult = "complete" | "started" | "failed";
+
+export interface DownloadMediaResponse {
+  result: DownloadResult;
+}
+
 export type BackgroundRequest = FetchDocumentRequest | CancelFetchRequest | DownloadMediaRequest;
 
 export interface FetchDocumentSuccess {
@@ -30,7 +42,6 @@ export type FetchErrorCode =
   | "duplicate-request"
   | "invalid-url"
   | "network-error"
-  | "response-too-large"
   | "timeout"
   | "unsupported-content-type";
 
@@ -56,6 +67,13 @@ export function isBackgroundRequest(value: unknown): value is BackgroundRequest 
     typeof value.url === "string" &&
     value.url.length > 0 &&
     value.url.length <= 8192
+  );
+}
+
+export function isDownloadMediaResponse(value: unknown): value is DownloadMediaResponse {
+  return (
+    isRecord(value) &&
+    (value.result === "complete" || value.result === "started" || value.result === "failed")
   );
 }
 
@@ -87,7 +105,6 @@ const FETCH_ERROR_CODES = new Set<FetchErrorCode>([
   "duplicate-request",
   "invalid-url",
   "network-error",
-  "response-too-large",
   "timeout",
   "unsupported-content-type",
 ]);

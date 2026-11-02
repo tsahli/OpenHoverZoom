@@ -12,6 +12,8 @@ export interface Settings {
   maxPreviewPercent: number;
   mediaVolumePercent: number;
   showSameSizeImages: boolean;
+  /** Looks up the page behind a plain link for a picture. Off because it fetches linked sites. */
+  previewTextLinks: boolean;
   downloadShortcut: string;
   previewDisableShortcut: string;
   disabledSites: string[];
@@ -23,6 +25,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = {
   maxPreviewPercent: 85,
   mediaVolumePercent: 75,
   showSameSizeImages: false,
+  previewTextLinks: false,
   downloadShortcut: DEFAULT_DOWNLOAD_SHORTCUT,
   previewDisableShortcut: DEFAULT_PREVIEW_DISABLE_SHORTCUT,
   disabledSites: [],
@@ -59,6 +62,10 @@ export function sanitizeSettings(value: unknown): Settings {
       typeof record.showSameSizeImages === "boolean"
         ? record.showSameSizeImages
         : DEFAULT_SETTINGS.showSameSizeImages,
+    previewTextLinks:
+      typeof record.previewTextLinks === "boolean"
+        ? record.previewTextLinks
+        : DEFAULT_SETTINGS.previewTextLinks,
     downloadShortcut,
     previewDisableShortcut,
     disabledSites: sanitizeSites(record.disabledSites),

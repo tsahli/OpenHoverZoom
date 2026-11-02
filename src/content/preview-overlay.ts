@@ -1,8 +1,19 @@
-import type { MediaCandidate } from "../resolver/candidate";
+import { galleryItemAttempts, type PreviewPlan } from "../resolver";
+import {
+  isDisplayedSource,
+  stripGallery,
+  type DeferredAttempts,
+  type LoadCheck,
+  type MediaCandidate,
+  type PreviewAttempt,
+} from "../resolver/candidate";
+import { passesLoadCheck } from "../resolver/size-variants";
+import { LruCache } from "../shared/lru-cache";
 import {
   DEFAULT_DOWNLOAD_SHORTCUT,
   sanitizeDownloadShortcut,
 } from "../shared/keyboard-shortcut";
+import type { DownloadResult } from "../shared/messages";
 import { DEFAULT_SETTINGS } from "../shared/settings";
 import {
   calculatePlacement,
@@ -13,17 +24,69 @@ import {
 const HOST_ID = "open-hover-zoom-host";
 const MAX_GALLERY_ITEMS = 64;
 const PANEL_INLINE_BORDER_PIXELS = 2;
+// Dimensions arrive with the first bytes of an image, so a request that has none by
+// now has stalled however large the file is. A slow server may take seconds to scale
+// an image on demand, so this is generous for a first response.
+const LOAD_STALL_MILLISECONDS = 8_000;
+// An image reporting dimensions is transferring, and only needs a limit in case the
+// transfer itself stalls. This allows about 19 MB at 5 Mbit/s.
+const IMAGE_TRANSFER_LIMIT_MILLISECONDS = 30_000;
+const FAILED_GUESS_TTL_MILLISECONDS = 5 * 60_000;
+const LOOKUP_SPINNER_DELAY_MILLISECONDS = 120;
+// A preview glanced at in passing should not cost its neighbours' downloads.
+const PRELOAD_DWELL_MILLISECONDS = 400;
+// Long enough to read a word, short enough to be gone before the next hover.
+const DOWNLOAD_STATUS_MILLISECONDS = 2_500;
+
+type DownloadState = "saving" | DownloadResult;
+
+// "Saved" is only said once Chrome reports the file written. A download that began but
+// was not seen to finish, or was handed to the page to start, is only that.
+const DOWNLOAD_STATUS_TEXT: Readonly<Record<DownloadState, string>> = {
+  saving: "Saving…",
+  complete: "Saved",
+  started: "Download started",
+  failed: "Download failed",
+};
+const DOWNLOAD_STATUS_TITLE: Readonly<Record<DownloadState, string>> = {
+  saving: "Starting the download",
+  complete: "Chrome finished saving the file to your downloads folder",
+  started: "Chrome started the download. It may not have finished, and failure is not reported",
+  failed: "Chrome could not save this file",
+};
+const DOWNLOAD_HINT_TITLE = "Download this media";
+
+type LoadOutcome = "loaded" | "failed" | "timed-out";
+type PreviewMedia = HTMLImageElement | HTMLVideoElement | HTMLAudioElement;
+
+export type PreviewOutcome = "accepted" | "none" | "cancelled";
 
 interface PreparedMedia {
-  key: string;
-  media: HTMLElement;
-  ready: Promise<boolean>;
+  media: PreviewMedia;
+  ready: Promise<LoadOutcome>;
 }
 
-export interface GallerySelection {
-  index: number;
+interface AcceptedMedia {
   candidate: MediaCandidate;
+  media: PreviewMedia;
 }
+
+interface PreloadEntry {
+  controller: AbortController;
+  result: Promise<AcceptedMedia | null>;
+}
+
+interface AttemptHooks {
+  beforeLoad?: () => void;
+  /** Runs as a lookup starts and returns what to do when it ends. */
+  onLookup?: () => () => void;
+  /** Preloading spends no page fetches and never touches video or audio. */
+  imagesWithoutLookups?: boolean;
+}
+
+// A guess that failed to load stays failed for a while, so hovering the same image
+// again skips straight to the attempt that worked.
+const failedGuesses = new LruCache<string, true>(200);
 
 export class PreviewOverlay {
   readonly #host: HTMLDivElement;
@@ -38,8 +101,13 @@ export class PreviewOverlay {
   #gallery: MediaCandidate[] = [];
   #galleryIndex = 0;
   #requestedGalleryIndex = 0;
-  #renderSequence = 0;
-  #prepared: PreparedMedia | null = null;
+  /** Gallery items with nothing left to work out, because one was accepted. */
+  #settledGalleryItems = new Set<number>();
+  #preloads = new Map<number, PreloadEntry>();
+  #preloadTimer: number | null = null;
+  #hasNavigated = false;
+  #run: AbortController | null = null;
+  #downloadStatusTimer: number | null = null;
   #currentCandidate: MediaCandidate | null = null;
 
   constructor(
@@ -73,7 +141,7 @@ export class PreviewOverlay {
     this.#downloadShortcut = sanitizeDownloadShortcut(downloadShortcut);
     this.#mediaVolumePercent = normalizedVolumePercent(mediaVolumePercent);
     const hint = this.#panel.querySelector<HTMLElement>(".download-hint");
-    if (hint) hint.textContent = this.#downloadHintText();
+    if (hint && !hint.dataset.state) hint.textContent = this.#downloadHintText();
     const media = this.#panel.querySelector(".media-frame > .media");
     if (media instanceof HTMLMediaElement) this.#startMediaPlayback(media);
     this.reposition();
@@ -101,107 +169,64 @@ export class PreviewOverlay {
     return !this.#panel.hidden ? this.#currentCandidate : null;
   }
 
-  getVisibleImageUrl(): string | null {
-    return !this.#panel.hidden && this.#currentCandidate?.kind === "image"
-      ? this.#currentCandidate.url
-      : null;
-  }
-
-  getVisibleImageCandidate(): MediaCandidate | null {
-    return !this.#panel.hidden && this.#currentCandidate?.kind === "image"
-      ? this.#currentCandidate
-      : null;
-  }
-
   showLoading(): void {
     this.#raiseToTopLayer();
-    this.#renderSequence += 1;
+    this.#beginRun();
+    this.#clearDownloadStatusTimer();
     this.#stopPanelMedia();
-    this.#gallery = [];
-    this.#galleryIndex = 0;
-    this.#requestedGalleryIndex = 0;
+    this.#resetGallery();
     this.#currentCandidate = null;
-    this.#panel.style.removeProperty("width");
-    this.#panel.replaceChildren(this.#createLoader("Resolving preview"));
-    this.#panel.className = "panel loading";
-    this.#panel.hidden = false;
-    this.reposition();
+    this.#showLoader("Resolving preview");
   }
 
-  prepare(candidate: MediaCandidate): void {
-    const key = mediaKey(candidate);
-    if (this.#prepared?.key === key) return;
-    this.#ensureConnected();
-    this.#discardPrepared();
-    this.#prepared = this.#prepareMedia(candidate);
-  }
-
-  show(candidate: MediaCandidate, fallback: MediaCandidate | null = null): void {
-    const preparedKey = this.#prepared?.key;
-    if (
-      preparedKey &&
-      preparedKey !== mediaKey(candidate) &&
-      (!fallback || preparedKey !== mediaKey(fallback))
-    ) {
-      this.#discardPrepared();
-    }
-    const suppliedGallery = candidate.gallery?.slice(0, MAX_GALLERY_ITEMS) ?? [];
-    this.#gallery = suppliedGallery.length > 1
-      ? suppliedGallery.map(stripGallery)
-      : [stripGallery(candidate)];
-    this.#galleryIndex = clampIndex(candidate.galleryIndex ?? 0, this.#gallery.length);
+  /** Tries the plan's attempts in order until one is accepted, the signal aborts or a newer run starts. */
+  show(plan: PreviewPlan, signal: AbortSignal): Promise<PreviewOutcome> {
+    const run = this.#beginRun(signal);
+    this.#resetGallery();
+    const items = plan.gallery?.items.slice(0, MAX_GALLERY_ITEMS) ?? [];
+    this.#gallery = items.map(stripGallery);
+    this.#galleryIndex = clampIndex(plan.gallery?.index ?? 0, this.#gallery.length);
     this.#requestedGalleryIndex = this.#galleryIndex;
-    this.#gallery[this.#galleryIndex] = stripGallery(candidate);
-    this.#loadIndex(this.#galleryIndex, fallback);
+    const hooks = plan.quiet ? {} : { beforeLoad: () => this.#ensureLoader() };
+    return this.#runAttempts(plan.attempts, this.#galleryIndex, run, hooks);
   }
 
-  navigateGallery(delta: -1 | 1): GallerySelection | null {
-    if (this.#panel.hidden || this.#gallery.length < 2) return null;
+  /**
+   * Moves through the gallery. The visible image stays up until the next one is
+   * accepted, so only a page lookup that takes a noticeable time shows a spinner.
+   */
+  navigateGallery(delta: -1 | 1, signal: AbortSignal): boolean {
+    if (this.#panel.hidden || this.#gallery.length < 2) return false;
     const nextIndex =
       (this.#requestedGalleryIndex + delta + this.#gallery.length) % this.#gallery.length;
-    const candidate = this.#gallery[nextIndex];
-    if (!candidate) return null;
-    if (candidate.linkedPageUrl && candidate.source !== "document-metadata") {
-      this.#requestedGalleryIndex = nextIndex;
-      this.#showGalleryLoading(candidate);
-    } else {
-      this.#loadIndex(nextIndex);
-    }
-    return { index: nextIndex, candidate };
-  }
-
-  resolveGallerySelection(
-    selection: GallerySelection,
-    candidate: MediaCandidate | null,
-  ): boolean {
-    const current = this.#gallery[selection.index];
-    if (
-      !current ||
-      current.url !== selection.candidate.url ||
-      current.linkedPageUrl !== selection.candidate.linkedPageUrl
-    ) {
-      return false;
-    }
-    const resolved = candidate && candidate.url !== current.url
-      ? stripGallery(candidate)
-      : current;
-    this.#gallery[selection.index] = resolved;
-    if (this.#requestedGalleryIndex === selection.index) {
-      this.#loadIndex(
-        selection.index,
-        resolved.url !== current.url ? current : null,
-      );
-    }
+    if (!this.#gallery[nextIndex]) return false;
+    this.#requestedGalleryIndex = nextIndex;
+    this.#hasNavigated = true;
+    this.#clearPreloadTimer();
+    const run = this.#beginRun(signal);
+    const owner = this.#run;
+    void this.#showGalleryItem(nextIndex, run).then((outcome) => {
+      if (this.#run !== owner || outcome === "accepted") return;
+      this.#requestedGalleryIndex = this.#galleryIndex;
+      if (outcome === "none" && !this.#panel.querySelector(".media-frame")) this.hide();
+    });
     return true;
   }
 
+  /**
+   * Shows how a download started from the visible preview is going, in its metadata
+   * bar. The download carries on if the preview goes away, and then nothing is shown.
+   */
+  trackDownload(candidate: MediaCandidate, result: Promise<DownloadResult>): void {
+    this.#showDownloadStatus(candidate, "saving");
+    void result.then((outcome) => this.#showDownloadStatus(candidate, outcome));
+  }
+
   hide(): void {
-    this.#renderSequence += 1;
-    this.#discardPrepared();
+    this.#beginRun();
+    this.#clearDownloadStatusTimer();
     this.#stopPanelMedia();
-    this.#gallery = [];
-    this.#galleryIndex = 0;
-    this.#requestedGalleryIndex = 0;
+    this.#resetGallery();
     this.#currentCandidate = null;
     this.#hasAnchor = false;
     this.#preferredSide = null;
@@ -241,78 +266,299 @@ export class PreviewOverlay {
     this.#panel.style.top = `${placement.top}px`;
   }
 
-  #loadIndex(index: number, fallback: MediaCandidate | null = null): void {
-    const candidate = this.#gallery[index];
-    if (!candidate) {
-      this.hide();
-      return;
-    }
-    this.#requestedGalleryIndex = index;
-
-    this.#raiseToTopLayer();
-    const sequence = ++this.#renderSequence;
-    const hasVisibleMedia = this.#panel.querySelector(".media-frame") !== null;
-    for (const stalePreloader of this.#panel.querySelectorAll(".preload-bin")) {
-      for (const media of stalePreloader.querySelectorAll<HTMLMediaElement>("audio, video")) {
-        this.#disposeMedia(media);
-      }
-      stalePreloader.remove();
-    }
-    if (!hasVisibleMedia && (this.#panel.hidden || !this.#panel.classList.contains("loading"))) {
-      this.#panel.style.removeProperty("width");
-      this.#panel.replaceChildren(this.#createLoader("Loading preview"));
-      this.#panel.className = "panel loading";
-      this.#panel.hidden = false;
-    }
-    this.#applySizeLimit();
-
-    const prepared = this.#takePrepared(candidate) ?? this.#prepareMedia(candidate);
-    const media = prepared.media;
-    const preloader = document.createElement("div");
-    preloader.className = "preload-bin";
-    preloader.append(media);
-    this.#panel.append(preloader);
-    void prepared.ready.then((ready) => {
-      if (sequence !== this.#renderSequence) return;
-      if (ready) {
-        this.#galleryIndex = index;
-        this.#requestedGalleryIndex = index;
-        this.#discardPrepared();
-        this.#commitMedia(media, candidate);
-        return;
-      }
-      if (fallback && fallback.url !== candidate.url) {
-        this.#gallery[index] = stripGallery(fallback);
-        this.#loadIndex(index);
-        return;
-      }
-      if (hasVisibleMedia) {
-        this.#requestedGalleryIndex = this.#galleryIndex;
-        preloader.remove();
-        return;
-      }
-      console.debug(
-        `[OpenHoverZoom] Preview candidate did not load (${candidate.kind}, ${candidate.source}): ${candidate.url}`,
-      );
-      this.hide();
-    });
-    const loader = this.#panel.querySelector<HTMLElement>(".loader");
-    if (!hasVisibleMedia && loader) loader.setAttribute("aria-label", "Loading preview");
-    requestAnimationFrame(() => this.reposition());
+  #showDownloadStatus(candidate: MediaCandidate, state: DownloadState): void {
+    if (this.#panel.hidden || this.#currentCandidate !== candidate) return;
+    const hint = this.#panel.querySelector<HTMLElement>(".download-hint");
+    if (!hint) return;
+    this.#clearDownloadStatusTimer();
+    hint.textContent = DOWNLOAD_STATUS_TEXT[state];
+    hint.title = DOWNLOAD_STATUS_TITLE[state];
+    hint.dataset.state = state;
+    if (state === "saving") return;
+    this.#downloadStatusTimer = window.setTimeout(() => {
+      this.#downloadStatusTimer = null;
+      hint.textContent = this.#downloadHintText();
+      hint.title = DOWNLOAD_HINT_TITLE;
+      delete hint.dataset.state;
+    }, DOWNLOAD_STATUS_MILLISECONDS);
   }
 
-  #showGalleryLoading(fallback: MediaCandidate): void {
+  #clearDownloadStatusTimer(): void {
+    if (this.#downloadStatusTimer !== null) {
+      clearTimeout(this.#downloadStatusTimer);
+      this.#downloadStatusTimer = null;
+    }
+  }
+
+  /** Cancels whatever is running. The returned signal also follows the caller's. */
+  #beginRun(external?: AbortSignal): AbortSignal {
+    this.#run?.abort();
+    this.#run = new AbortController();
+    return external ? AbortSignal.any([external, this.#run.signal]) : this.#run.signal;
+  }
+
+  #resetGallery(): void {
+    this.#clearPreloads();
+    this.#gallery = [];
+    this.#galleryIndex = 0;
+    this.#requestedGalleryIndex = 0;
+    this.#settledGalleryItems.clear();
+    this.#hasNavigated = false;
+  }
+
+  async #runAttempts(
+    attempts: readonly PreviewAttempt[],
+    index: number,
+    signal: AbortSignal,
+    hooks: AttemptHooks,
+  ): Promise<PreviewOutcome> {
+    const accepted = await this.#firstAccepted(attempts, signal, hooks);
+    if (signal.aborted) {
+      if (accepted) this.#discardMedia(accepted.media);
+      return "cancelled";
+    }
+    if (!accepted) return "none";
+    this.#commitAccepted(accepted, index);
+    return "accepted";
+  }
+
+  async #showGalleryItem(index: number, signal: AbortSignal): Promise<PreviewOutcome> {
+    const preload = this.#preloads.get(index);
+    if (preload) {
+      // Waiting reuses a transfer already under way instead of restarting it.
+      const accepted = await untilAborted(preload.result, signal);
+      if (signal.aborted) return "cancelled";
+      if (accepted) {
+        this.#preloads.delete(index);
+        this.#commitAccepted(accepted, index);
+        return "accepted";
+      }
+    }
+    const attempts = this.#galleryAttempts(index);
+    return this.#runAttempts(attempts, index, signal, {
+      beforeLoad: () => this.#ensureLoader(),
+      onLookup: () => this.#delaySpinnerDuringLookup(signal),
+    });
+  }
+
+  #galleryAttempts(index: number): PreviewAttempt[] {
+    const item = this.#gallery[index];
+    if (!item) return [];
+    return this.#settledGalleryItems.has(index) ? [item] : galleryItemAttempts(item);
+  }
+
+  /** Loads attempts one at a time. Nothing here touches what is on screen. */
+  async #firstAccepted(
+    attempts: readonly PreviewAttempt[],
+    signal: AbortSignal,
+    hooks: AttemptHooks,
+  ): Promise<AcceptedMedia | null> {
+    const queue = [...attempts];
+    const tried = new Set<string>();
+    while (!signal.aborted) {
+      const attempt = queue.shift();
+      if (!attempt) return null;
+      if ("expand" in attempt) {
+        if (hooks.imagesWithoutLookups) return null;
+        queue.unshift(...await this.#expandAttempts(attempt, signal, hooks));
+        continue;
+      }
+      if (hooks.imagesWithoutLookups && attempt.kind !== "image") return null;
+      // The same URL can return without a check, as a gallery's same-size item does.
+      const key = `${mediaKey(attempt)}\u0000${attempt.check ? "checked" : "unchecked"}`;
+      if (tried.has(key) || failedGuesses.get(attempt.url)) continue;
+      tried.add(key);
+
+      // The displayed image is already loaded, so waiting for it needs no spinner.
+      if (!isDisplayedSource(attempt)) hooks.beforeLoad?.();
+      const prepared = this.#prepareMedia(attempt, signal);
+      const outcome = await prepared.ready;
+      if (
+        outcome === "loaded" &&
+        !signal.aborted &&
+        await this.#passesCheck(prepared.media, attempt.check, signal) &&
+        !signal.aborted
+      ) {
+        return { candidate: attempt, media: prepared.media };
+      }
+      this.#discardMedia(prepared.media);
+      if (signal.aborted) return null;
+      // A timeout may be a passing network problem, so only a real failure is remembered.
+      if (outcome === "failed" && attempt.source === "url-guess") {
+        failedGuesses.set(attempt.url, true, FAILED_GUESS_TTL_MILLISECONDS);
+      }
+      if (outcome !== "loaded" && attempt.source !== "url-guess") {
+        console.debug(
+          `[OpenHoverZoom] Preview candidate did not load (${attempt.kind}, ${attempt.source}, ${outcome}): ${attempt.url}`,
+        );
+      }
+    }
+    return null;
+  }
+
+  async #expandAttempts(
+    deferred: DeferredAttempts,
+    signal: AbortSignal,
+    hooks: AttemptHooks,
+  ): Promise<PreviewAttempt[]> {
+    const endLookup = hooks.onLookup?.();
+    try {
+      return await deferred.expand(signal);
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "AbortError")) {
+        console.warn("[OpenHoverZoom] Linked page lookup failed", error);
+      }
+      return [];
+    } finally {
+      endLookup?.();
+    }
+  }
+
+  async #passesCheck(
+    media: PreviewMedia,
+    check: LoadCheck | undefined,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    if (!check) return true;
+    if (media instanceof HTMLVideoElement) {
+      // Only a minimum size can be asked of a video, which has no thumbnail to match.
+      return check.minEdge
+        ? passesLoadCheck(
+            { width: media.videoWidth, height: media.videoHeight },
+            { minEdge: check.minEdge },
+          )
+        : true;
+    }
+    if (!(media instanceof HTMLImageElement)) return true;
+    const actual = { width: media.naturalWidth, height: media.naturalHeight };
+    const thumbnail = check.thumbnail;
+    if (!thumbnail || (thumbnail.width && thumbnail.height)) return passesLoadCheck(actual, check);
+
+    // The page has not said how big its image is, so load it to find out. It is
+    // usually already displayed, which makes this a cache hit.
+    const reference = this.#prepareMedia(
+      { url: thumbnail.url, kind: "image", source: "image-src", confidence: 0 },
+      signal,
+    );
+    const loaded = await reference.ready === "loaded";
+    const size = reference.media instanceof HTMLImageElement
+      ? { width: reference.media.naturalWidth, height: reference.media.naturalHeight }
+      : null;
+    this.#discardMedia(reference.media);
+    return loaded && size !== null
+      ? passesLoadCheck(actual, { ...check, thumbnail: { ...thumbnail, ...size } })
+      : false;
+  }
+
+  #commitAccepted(accepted: AcceptedMedia, requestedIndex: number): void {
+    let index = requestedIndex;
+    const supplied = accepted.candidate.gallery?.slice(0, MAX_GALLERY_ITEMS) ?? [];
+    if (supplied.length > 1) {
+      this.#clearPreloads();
+      this.#settledGalleryItems.clear();
+      this.#gallery = supplied.map(stripGallery);
+      index = clampIndex(accepted.candidate.galleryIndex ?? 0, this.#gallery.length);
+    }
+    // Its check has been passed, so a later return to this item needs no repeat.
+    const { check: _check, ...shown } = stripGallery(accepted.candidate);
+    this.#gallery[index] = shown;
+    this.#settledGalleryItems.add(index);
+    this.#galleryIndex = index;
+    this.#requestedGalleryIndex = index;
     this.#raiseToTopLayer();
-    this.#renderSequence += 1;
-    this.#discardPrepared();
-    this.#stopPanelMedia();
-    this.#currentCandidate = null;
+    this.#commitMedia(accepted.media, shown);
+    this.#schedulePreloads();
+  }
+
+  /** Readies the items either side of the visible one, next first, one at a time. */
+  #schedulePreloads(): void {
+    this.#clearPreloadTimer();
+    const length = this.#gallery.length;
+    if (length < 2) return;
+    const center = this.#galleryIndex;
+    for (const [index, entry] of this.#preloads) {
+      const distance = Math.abs(index - center);
+      if (Math.min(distance, length - distance) > 1) {
+        this.#preloads.delete(index);
+        this.#cancelPreload(entry);
+      }
+    }
+    const neighbours = [(center + 1) % length, (center - 1 + length) % length];
+    this.#preloadTimer = window.setTimeout(() => {
+      this.#preloadTimer = null;
+      void (async () => {
+        for (const index of neighbours) {
+          if (this.#galleryIndex !== center || this.#panel.hidden) return;
+          await this.#preload(index)?.result;
+        }
+      })();
+    }, this.#hasNavigated ? 0 : PRELOAD_DWELL_MILLISECONDS);
+  }
+
+  #preload(index: number): PreloadEntry | null {
+    const existing = this.#preloads.get(index);
+    if (existing) return existing;
+    if (index === this.#galleryIndex || this.#gallery[index]?.kind !== "image") return null;
+    const controller = new AbortController();
+    const entry: PreloadEntry = {
+      controller,
+      result: this.#firstAccepted(this.#galleryAttempts(index), controller.signal, {
+        imagesWithoutLookups: true,
+      }),
+    };
+    this.#preloads.set(index, entry);
+    return entry;
+  }
+
+  #cancelPreload(entry: PreloadEntry): void {
+    entry.controller.abort();
+    void entry.result.then((accepted) => {
+      if (accepted) this.#discardMedia(accepted.media);
+    });
+  }
+
+  #clearPreloads(): void {
+    this.#clearPreloadTimer();
+    for (const entry of this.#preloads.values()) this.#cancelPreload(entry);
+    this.#preloads.clear();
+  }
+
+  #clearPreloadTimer(): void {
+    if (this.#preloadTimer !== null) {
+      clearTimeout(this.#preloadTimer);
+      this.#preloadTimer = null;
+    }
+  }
+
+  #ensureLoader(): void {
+    if (
+      this.#panel.querySelector(".media-frame") ||
+      (!this.#panel.hidden && this.#panel.classList.contains("loading"))
+    ) {
+      return;
+    }
+    this.#raiseToTopLayer();
+    this.#showLoader("Loading preview");
+  }
+
+  #showLoader(label: string): void {
     this.#panel.style.removeProperty("width");
-    this.#panel.replaceChildren(this.#createLoader("Resolving preview"));
+    this.#panel.replaceChildren(this.#createLoader(label));
     this.#panel.className = "panel loading";
     this.#panel.hidden = false;
     this.reposition();
-    this.prepare(fallback);
+  }
+
+  /** A lookup that answers quickly, such as from the cache, never disturbs the image. */
+  #delaySpinnerDuringLookup(signal: AbortSignal): () => void {
+    if (!this.#panel.querySelector(".media-frame")) return () => undefined;
+    const timer = window.setTimeout(() => {
+      if (signal.aborted) return;
+      this.#stopPanelMedia();
+      this.#currentCandidate = null;
+      this.#showLoader("Resolving preview");
+    }, LOOKUP_SPINNER_DELAY_MILLISECONDS);
+    return () => clearTimeout(timer);
   }
 
   #commitMedia(media: HTMLElement, candidate: MediaCandidate): void {
@@ -321,6 +567,7 @@ export class PreviewOverlay {
     media.classList.add("media");
     frame.append(media);
     this.#stopPanelMedia(media);
+    this.#clearDownloadStatusTimer();
     this.#panel.style.removeProperty("width");
     this.#panel.replaceChildren(frame);
     this.#panel.className = "panel";
@@ -342,61 +589,44 @@ export class PreviewOverlay {
     }
   }
 
-  #prepareMedia(candidate: MediaCandidate): PreparedMedia {
-    let settle: ((ready: boolean) => void) | undefined;
-    const ready = new Promise<boolean>((resolve) => {
-      settle = resolve;
+  #prepareMedia(candidate: MediaCandidate, signal: AbortSignal): PreparedMedia {
+    const media = createMediaElement(candidate);
+    const ready = new Promise<LoadOutcome>((resolve) => {
+      let timer: number | undefined;
+      const finish = (outcome: LoadOutcome): void => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", onAbort);
+        resolve(outcome);
+      };
+      const onAbort = (): void => finish("failed");
+      const onStall = (): void => {
+        if (media instanceof HTMLImageElement && media.naturalWidth > 0) {
+          timer = window.setTimeout(
+            () => finish("timed-out"),
+            IMAGE_TRANSFER_LIMIT_MILLISECONDS - LOAD_STALL_MILLISECONDS,
+          );
+        } else {
+          finish("timed-out");
+        }
+      };
+      media.addEventListener(
+        media instanceof HTMLImageElement ? "load" : "loadedmetadata",
+        () => finish("loaded"),
+        { once: true },
+      );
+      media.addEventListener("error", () => finish("failed"), { once: true });
+      if (signal.aborted) {
+        finish("failed");
+        return;
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+      timer = window.setTimeout(onStall, LOAD_STALL_MILLISECONDS);
+      media.src = candidate.url;
     });
-    const onReady = (): void => settle?.(true);
-    const onError = (): void => settle?.(false);
-    let media: HTMLElement;
-    if (candidate.kind === "video") {
-      const video = document.createElement("video");
-      video.autoplay = false;
-      video.loop = true;
-      video.muted = true;
-      video.playsInline = true;
-      video.preload = "metadata";
-      video.setAttribute("referrerpolicy", "no-referrer");
-      video.addEventListener("loadedmetadata", onReady, { once: true });
-      video.addEventListener("error", onError, { once: true });
-      video.src = candidate.url;
-      media = video;
-    } else if (candidate.kind === "audio") {
-      const audio = document.createElement("audio");
-      audio.autoplay = false;
-      audio.muted = true;
-      audio.preload = "metadata";
-      audio.controls = true;
-      audio.setAttribute("referrerpolicy", "no-referrer");
-      audio.addEventListener("loadedmetadata", onReady, { once: true });
-      audio.addEventListener("error", onError, { once: true });
-      audio.src = candidate.url;
-      media = audio;
-    } else {
-      const image = document.createElement("img");
-      image.alt = "";
-      image.decoding = "async";
-      image.referrerPolicy = "no-referrer";
-      image.addEventListener("load", onReady, { once: true });
-      image.addEventListener("error", onError, { once: true });
-      image.src = candidate.url;
-      media = image;
-    }
-    return { key: mediaKey(candidate), media, ready };
+    return { media, ready };
   }
 
-  #takePrepared(candidate: MediaCandidate): PreparedMedia | null {
-    if (this.#prepared?.key !== mediaKey(candidate)) return null;
-    const prepared = this.#prepared;
-    this.#prepared = null;
-    return prepared;
-  }
-
-  #discardPrepared(): void {
-    const media = this.#prepared?.media;
-    this.#prepared = null;
-    if (!media) return;
+  #discardMedia(media: PreviewMedia): void {
     if (media instanceof HTMLMediaElement) {
       this.#disposeMedia(media);
     } else {
@@ -501,7 +731,7 @@ export class PreviewOverlay {
     const downloadHint = document.createElement("span");
     downloadHint.className = "download-hint";
     downloadHint.textContent = this.#downloadHintText();
-    downloadHint.title = "Download this media";
+    downloadHint.title = DOWNLOAD_HINT_TITLE;
     metadata.append(downloadHint);
     if (hasGallery) {
       const status = document.createElement("span");
@@ -567,9 +797,41 @@ export class PreviewOverlay {
   }
 }
 
-function stripGallery(candidate: MediaCandidate): MediaCandidate {
-  const { gallery: _gallery, galleryIndex: _galleryIndex, ...item } = candidate;
-  return item;
+function createMediaElement(candidate: MediaCandidate): PreviewMedia {
+  if (candidate.kind === "video") {
+    const video = document.createElement("video");
+    video.autoplay = false;
+    video.loop = true;
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = "metadata";
+    video.setAttribute("referrerpolicy", "no-referrer");
+    return video;
+  }
+  if (candidate.kind === "audio") {
+    const audio = document.createElement("audio");
+    audio.autoplay = false;
+    audio.muted = true;
+    audio.preload = "metadata";
+    audio.controls = true;
+    audio.setAttribute("referrerpolicy", "no-referrer");
+    return audio;
+  }
+  const image = document.createElement("img");
+  image.alt = "";
+  image.decoding = "async";
+  image.referrerPolicy = "no-referrer";
+  return image;
+}
+
+function untilAborted<Value>(promise: Promise<Value>, signal: AbortSignal): Promise<Value | null> {
+  return Promise.race([
+    promise,
+    new Promise<null>((resolve) => {
+      if (signal.aborted) resolve(null);
+      signal.addEventListener("abort", () => resolve(null), { once: true });
+    }),
+  ]);
 }
 
 function mediaKey(candidate: MediaCandidate): string {
@@ -635,7 +897,6 @@ const OVERLAY_CSS = `
     display: block;
     width: min(360px, var(--ohz-max-width));
   }
-  .preload-bin { display: none !important; }
   .loader {
     all: initial;
     box-sizing: border-box;
@@ -701,6 +962,9 @@ const OVERLAY_CSS = `
     font: 11px/1.35 system-ui, sans-serif;
     white-space: nowrap;
   }
+  .download-hint[data-state="saving"] { color: rgba(246, 247, 249, 0.86); }
+  .download-hint[data-state="complete"] { color: rgba(146, 214, 160, 0.9); }
+  .download-hint[data-state="failed"] { color: rgba(246, 150, 140, 0.9); }
   .audio-status {
     all: initial;
     display: block;

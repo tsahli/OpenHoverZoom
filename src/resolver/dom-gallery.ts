@@ -1,15 +1,16 @@
-import type { CandidateSource, MediaCandidate } from "./candidate";
+import type { CandidateSource, MediaCandidate, ThumbnailReference } from "./candidate";
 import { mediaKindFromUrl } from "./media-type";
-import { applyRewriteRules } from "./rewrite-rules";
 import { rankCandidates } from "./score-candidates";
 import { selectLargestSrcset, type SrcsetCandidate } from "./srcset";
 import { normalizeUrl } from "./url";
+import { childElements, closestAcrossShadow, parentAcrossShadow } from "../shared/dom";
 
 const MAX_GALLERY_ANCESTORS = 6;
 const MAX_GALLERY_DEPTH = 6;
 const MAX_INSPECTED_NODES = 640;
 const MAX_GALLERY_ITEMS = 64;
 const MAX_CAPTION_LENGTH = 500;
+const PLACEHOLDER_MAX_EDGE = 2;
 const LAZY_SRCSET_ATTRIBUTES = ["data-srcset", "data-lazy-srcset"] as const;
 const GALLERY_SEMANTICS = /(?:^|[-_\s])(album|carousel|gallery|grid|media-list|photos?|slider|slideshow)(?:$|[-_\s])/iu;
 
@@ -24,7 +25,7 @@ export function discoverDomGallery(
   lazyAttributes: readonly string[],
   linkedPageForImage?: (image: HTMLImageElement) => string | null,
 ): DiscoveredGallery | null {
-  let root = primaryImage.parentElement;
+  let root = parentAcrossShadow(primaryImage);
 
   for (let depth = 0; root && depth < MAX_GALLERY_ANCESTORS; depth += 1) {
     if (root === primaryImage.ownerDocument.body || root === primaryImage.ownerDocument.documentElement) {
@@ -46,14 +47,14 @@ export function discoverDomGallery(
         : null;
       if (gallery) return gallery;
     }
-    root = root.parentElement;
+    root = parentAcrossShadow(root);
   }
   return null;
 }
 
 function collectBoundedImages(root: Element): HTMLImageElement[] {
   const images: HTMLImageElement[] = [];
-  const stack = Array.from(root.children, (element) => ({ element, depth: 1 })).reverse();
+  const stack = childElements(root).map((element) => ({ element, depth: 1 })).reverse();
   let inspected = 0;
 
   while (
@@ -68,7 +69,7 @@ function collectBoundedImages(root: Element): HTMLImageElement[] {
       images.push(entry.element);
     }
     if (entry.depth >= MAX_GALLERY_DEPTH) continue;
-    for (const child of Array.from(entry.element.children).reverse()) {
+    for (const child of childElements(entry.element).reverse()) {
       stack.push({ element: child, depth: entry.depth + 1 });
     }
   }
@@ -118,9 +119,11 @@ function createGallery(
     );
     if (!localCandidate) continue;
     const linkedPageUrl = linkedPageForImage?.(image) ?? null;
-    const candidate = linkedPageUrl && linkedPageUrl !== localCandidate.url
-      ? { ...localCandidate, linkedPageUrl }
-      : localCandidate;
+    const candidate: MediaCandidate = {
+      ...localCandidate,
+      thumbnail: thumbnailForImage(image, baseUrl) ?? { url: localCandidate.url },
+      ...(linkedPageUrl && linkedPageUrl !== localCandidate.url ? { linkedPageUrl } : {}),
+    };
     const existing = indices.get(candidate.url);
     if (existing !== undefined) {
       if (image === primaryImage) activeIndex = existing;
@@ -223,13 +226,21 @@ function candidateForImage(
       ...(caption ? { caption } : {}),
     });
   }
-  const rewritten = candidates.flatMap((candidate) =>
-    applyRewriteRules(candidate, {
-      pageUrl: image.ownerDocument.location.href,
-      target: "image",
-    }),
-  );
-  return rankCandidates([...rewritten, ...candidates], { showSameSizeImages: true })[0] ?? null;
+  return rankCandidates(candidates, { showSameSizeImages: true })[0] ?? null;
+}
+
+/** What the page displays for an image, or nothing when that is only a placeholder. */
+export function thumbnailForImage(
+  image: HTMLImageElement,
+  baseUrl: string,
+): ThumbnailReference | undefined {
+  const url = normalizeUrl(image.currentSrc || image.getAttribute("src") || "", baseUrl);
+  if (!url) return undefined;
+  const { naturalWidth: width, naturalHeight: height } = image;
+  if (width <= 0 || height <= 0) return { url };
+  return width > PLACEHOLDER_MAX_EDGE && height > PLACEHOLDER_MAX_EDGE
+    ? { url, width, height }
+    : undefined;
 }
 
 function largestPictureSource(picture: HTMLPictureElement): SrcsetCandidate | null {
@@ -266,19 +277,21 @@ function createCandidate(
 }
 
 function captionForImage(image: HTMLImageElement): string | undefined {
-  const figureCaption = image.closest("figure")?.querySelector("figcaption")?.textContent;
+  const figureCaption = closestAcrossShadow(image, "figure")
+    ?.querySelector("figcaption")?.textContent;
+  const link = closestAcrossShadow(image, "a");
   const value =
     image.alt.trim() ||
     image.title.trim() ||
     figureCaption?.trim() ||
-    image.closest("a")?.title.trim();
+    (link instanceof HTMLElement ? link.title.trim() : undefined);
   return value ? value.slice(0, MAX_CAPTION_LENGTH) : undefined;
 }
 
 function hasGallerySemantics(element: Element): boolean {
   const value = [
     element.id,
-    element.className,
+    element.getAttribute("class") ?? "",
     element.getAttribute("role") ?? "",
     element.getAttribute("aria-label") ?? "",
     element.getAttribute("aria-roledescription") ?? "",
@@ -288,8 +301,12 @@ function hasGallerySemantics(element: Element): boolean {
 
 function directBranch(root: Element, descendant: Element): Element | null {
   let current: Element | null = descendant;
-  while (current?.parentElement && current.parentElement !== root) current = current.parentElement;
-  return current?.parentElement === root ? current : null;
+  while (current) {
+    const parent = parentAcrossShadow(current);
+    if (parent === root) return current;
+    current = parent;
+  }
+  return null;
 }
 
 function branchSignature(element: Element): string {

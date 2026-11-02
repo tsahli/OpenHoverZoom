@@ -48,13 +48,21 @@ export function matchesPreviewDisableShortcut(
 ): boolean {
   const normalized = sanitizePreviewDisableShortcut(shortcut);
   const parts = normalized.split("+");
-  if (!parts.every((part) => normalizeModifier(part))) {
+  if (!isModifierOnly(parts)) {
     return shortcutFromKeyboardEvent(event) === normalized;
   }
   return normalizeModifier(event.key) !== null && parts.every((part) => {
     const modifier = normalizeModifier(part);
     return modifier ? modifierIsActive(event, modifier) : false;
   });
+}
+
+export function isModifierOnlyPreviewDisableShortcut(shortcut: string): boolean {
+  return isModifierOnly(sanitizePreviewDisableShortcut(shortcut).split("+"));
+}
+
+function isModifierOnly(parts: readonly string[]): boolean {
+  return parts.every((part) => normalizeModifier(part));
 }
 
 export function matchesPreviewDisableModifiers(
@@ -84,8 +92,7 @@ export function downloadShortcutConflictsWithPreviewDisable(
 ): boolean {
   const download = sanitizeDownloadShortcut(downloadShortcut).split("+");
   const disable = sanitizePreviewDisableShortcut(previewDisableShortcut).split("+");
-  const modifierOnly = disable.every((part) => normalizeModifier(part));
-  return modifierOnly
+  return isModifierOnly(disable)
     ? disable.every((part) => download.includes(part))
     : download.join("+") === disable.join("+");
 }

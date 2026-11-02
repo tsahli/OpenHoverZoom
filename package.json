@@ -17,10 +17,9 @@
     "audit:bundle": "node scripts/check-bundle.mjs"
   },
   "devDependencies": {
-    "@types/chrome": "0.2.5",
-    "esbuild": "0.28.1",
-    "jsdom": "29.1.1",
+    "@types/chrome": "0.3.7",
+    "esbuild": "0.28.2",
     "typescript": "7.0.2",
-    "vitest": "4.1.10"
+    "vitest": "5.1.0"
   }
 }

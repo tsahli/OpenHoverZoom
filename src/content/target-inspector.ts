@@ -4,9 +4,15 @@ import {
 } from "../resolver/background-image";
 import { LAZY_SOURCE_ATTRIBUTES } from "../resolver/dom-resolver";
 import { mediaKindFromUrl } from "../resolver/media-type";
+import { isEligibleTextLink } from "../resolver/text-link";
 import {
+  closestAcrossShadow,
   comparableAreaOverlap,
+  containsAcrossShadow,
+  containsRect,
+  elementsFromPointDeep,
   intersectionArea,
+  parentAcrossShadow,
   walkBoundedDescendants,
 } from "../shared/dom";
 
@@ -51,9 +57,15 @@ export interface PointerPosition {
   y: number;
 }
 
+export interface HoverTargetOptions {
+  /** Also accept a plain link with no media, whose page may have a picture. */
+  textLinks?: boolean;
+}
+
 export function findHoverTarget(
   eventTarget: EventTarget | null,
   pointer?: PointerPosition,
+  options: HoverTargetOptions = {},
 ): Element | null {
   if (!(eventTarget instanceof Element)) return null;
   if (isInsideInteractiveUiSurface(eventTarget, pointer)) return null;
@@ -95,7 +107,24 @@ export function findHoverTarget(
     }
   }
 
+  if (options.textLinks) {
+    // Only the nearest link counts: an outer link around it is a different target.
+    const link = paths.find((element) => element instanceof HTMLAnchorElement);
+    if (
+      link instanceof HTMLAnchorElement &&
+      isEligibleTextLink(link) &&
+      !(pointer && isObscuredByForeground(link, eventTarget, hitStack))
+    ) {
+      return link;
+    }
+  }
+
   return null;
+}
+
+/** True for an anchor found by `findHoverTarget` only because it is a plain link. */
+export function isTextLinkTarget(target: Element): target is HTMLAnchorElement {
+  return target instanceof HTMLAnchorElement && !isSupportedMediaLink(target);
 }
 
 export function isActivelyPlayingMedia(element: Element): boolean {
@@ -114,14 +143,15 @@ function isInsideInteractiveUiSurface(
   for (
     let depth = 0;
     current && depth < MAX_UI_SURFACE_ANCESTORS;
-    depth += 1, current = current.parentElement
+    depth += 1, current = parentAcrossShadow(current)
   ) {
     if (current.matches(ALWAYS_INERT_SURFACE_SELECTOR)) return true;
+    // aria-label is deliberately ignored: sites copy image alt text into it.
+    // SVG elements have a non-string className, so read the attribute instead.
     const semantics = [
       current.id,
-      current.className,
+      current.getAttribute("class") ?? "",
       current.getAttribute("role") ?? "",
-      current.getAttribute("aria-label") ?? "",
     ].join(" ");
     if (UI_SURFACE_SEMANTICS.test(semantics)) return true;
     // A persistent header or navigation bar is page structure, not a transient
@@ -175,11 +205,11 @@ function isObscuredByForeground(
   eventTarget: Element,
   hitStack: readonly Element[],
 ): boolean {
-  const interactive = eventTarget.closest(INTERACTIVE_SELECTOR);
+  const interactive = closestAcrossShadow(eventTarget, INTERACTIVE_SELECTOR);
   if (interactive && !isAssociatedSurface(interactive, candidate)) return true;
 
   const candidateIndex = hitStack.findIndex(
-    (element) => element === candidate || element.contains(candidate),
+    (element) => element === candidate || containsAcrossShadow(element, candidate),
   );
   const foreground = candidateIndex >= 0
     ? hitStack.slice(0, candidateIndex)
@@ -188,14 +218,14 @@ function isObscuredByForeground(
   return foreground.some((element) => {
     if (
       element === candidate ||
-      element.contains(candidate) ||
-      candidate.contains(element) ||
+      containsAcrossShadow(element, candidate) ||
+      containsAcrossShadow(candidate, element) ||
       element instanceof HTMLBodyElement ||
       element instanceof HTMLHtmlElement
     ) {
       return false;
     }
-    const foregroundInteractive = element.closest(INTERACTIVE_SELECTOR);
+    const foregroundInteractive = closestAcrossShadow(element, INTERACTIVE_SELECTOR);
     if (
       foregroundInteractive &&
       !isAssociatedSurface(foregroundInteractive, candidate)
@@ -210,13 +240,26 @@ function isObscuredByForeground(
 function isAssociatedSurface(foreground: Element, candidate: Element): boolean {
   if (
     foreground === candidate ||
-    foreground.contains(candidate) ||
-    candidate.contains(foreground)
+    containsAcrossShadow(foreground, candidate) ||
+    containsAcrossShadow(candidate, foreground)
   ) {
     return true;
   }
 
-  return comparableAreaOverlap(foreground, candidate) >= MIN_ASSOCIATED_SURFACE_OVERLAP;
+  return (
+    comparableAreaOverlap(foreground, candidate) >= MIN_ASSOCIATED_SURFACE_OVERLAP ||
+    isStretchedLink(foreground, candidate)
+  );
+}
+
+// A transparent link across a whole card leaves its picture visible and is the same
+// click, unlike a smaller control sitting on top of the picture.
+function isStretchedLink(foreground: Element, candidate: Element): boolean {
+  return (
+    foreground instanceof HTMLAnchorElement &&
+    containsRect(foreground, candidate) &&
+    !isBlockingSurface(foreground)
+  );
 }
 
 function isBlockingSurface(element: Element): boolean {
@@ -242,11 +285,8 @@ function collectHitStack(
   eventTarget: Element,
   pointer?: PointerPosition,
 ): Element[] {
-  const elementsFromPoint = eventTarget.ownerDocument.elementsFromPoint?.bind(
-    eventTarget.ownerDocument,
-  );
-  return pointer && elementsFromPoint
-    ? elementsFromPoint(pointer.x, pointer.y).slice(0, MAX_POINT_STACK)
+  return pointer
+    ? elementsFromPointDeep(eventTarget.ownerDocument, pointer.x, pointer.y, MAX_POINT_STACK)
     : [];
 }
 
@@ -265,7 +305,7 @@ function collectHitPaths(
         seen.add(current);
         paths.push(current);
       }
-      current = current.parentElement;
+      current = parentAcrossShadow(current);
     }
   }
   return paths;
@@ -315,7 +355,7 @@ function hasDeclaredMediaContext(element: Element): boolean {
     }
     const itemType = current.getAttribute("itemtype")?.toLowerCase() ?? "";
     if (/(?:image|video|audio)object$/u.test(itemType)) return true;
-    current = current.parentElement;
+    current = parentAcrossShadow(current);
   }
   return false;
 }
@@ -336,7 +376,7 @@ function hasMatchingLinkedMedia(anchor: HTMLAnchorElement): boolean {
   const href = anchor.href;
   if (!href) return false;
 
-  let root = anchor.parentElement;
+  let root = parentAcrossShadow(anchor);
   for (let depth = 0; root && depth < MAX_MEDIA_LINK_ANCESTORS; depth += 1) {
     for (const element of walkBoundedDescendants(root, MEDIA_DESCENDANT_WALK)) {
       if (
@@ -348,7 +388,7 @@ function hasMatchingLinkedMedia(anchor: HTMLAnchorElement): boolean {
         return true;
       }
     }
-    root = root.parentElement;
+    root = parentAcrossShadow(root);
   }
   return false;
 }

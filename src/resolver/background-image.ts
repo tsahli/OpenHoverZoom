@@ -1,3 +1,5 @@
+import { closestAcrossShadow } from "../shared/dom";
+
 export function extractBackgroundImageUrls(value: string): string[] {
   const urls: string[] = [];
   const expression = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*?))\s*\)/giu;
@@ -84,7 +86,7 @@ function isCompactBackgroundSurface(element: Element): boolean {
 
 /** Returns whether a large surface behaves like ambient page decoration. */
 export function isPageScaleDecoration(element: Element): boolean {
-  if (element.closest(EXPLICIT_MEDIA_SELECTOR)) return false;
+  if (closestAcrossShadow(element, EXPLICIT_MEDIA_SELECTOR)) return false;
 
   if (
     element instanceof HTMLImageElement &&

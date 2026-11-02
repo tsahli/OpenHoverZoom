@@ -47,11 +47,3 @@ export function isRemoteUrl(value: string): boolean {
     return false;
   }
 }
-
-export function hostMatches(hostname: string, allowedHosts: readonly string[]): boolean {
-  const normalized = hostname.toLowerCase();
-  return allowedHosts.some((host) => {
-    const allowed = host.toLowerCase();
-    return normalized === allowed || normalized.endsWith(`.${allowed}`);
-  });
-}

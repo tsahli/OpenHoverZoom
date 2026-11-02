@@ -14,6 +14,7 @@ const hoverDelay = requiredElement<HTMLInputElement>("hover-delay");
 const previewSize = requiredElement<HTMLInputElement>("preview-size");
 const mediaVolume = requiredElement<HTMLInputElement>("media-volume");
 const sameSize = requiredElement<HTMLInputElement>("same-size");
+const textLinks = requiredElement<HTMLInputElement>("text-links");
 const downloadShortcut = requiredElement<HTMLInputElement>("download-shortcut");
 const resetDownloadShortcut = requiredElement<HTMLButtonElement>("reset-download-shortcut");
 const previewDisableShortcut = requiredElement<HTMLInputElement>("preview-disable-shortcut");
@@ -90,6 +91,7 @@ async function initialize(): Promise<void> {
         maxPreviewPercent: previewSize.valueAsNumber,
         mediaVolumePercent: mediaVolume.valueAsNumber,
         showSameSizeImages: sameSize.checked,
+        previewTextLinks: textLinks.checked,
         downloadShortcut: nextDownloadShortcut,
         previewDisableShortcut: nextPreviewDisableShortcut,
       };
@@ -106,6 +108,7 @@ function render(): void {
   previewSize.value = String(settings.maxPreviewPercent);
   mediaVolume.value = String(settings.mediaVolumePercent);
   sameSize.checked = settings.showSameSizeImages;
+  textLinks.checked = settings.previewTextLinks;
   downloadShortcut.value = settings.downloadShortcut;
   previewDisableShortcut.value = settings.previewDisableShortcut;
   sitesList.replaceChildren();

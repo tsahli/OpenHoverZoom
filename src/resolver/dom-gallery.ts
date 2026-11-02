@@ -1,5 +1,6 @@
 import type { CandidateSource, MediaCandidate } from "./candidate";
 import { mediaKindFromUrl } from "./media-type";
+import { applyRewriteRules } from "./rewrite-rules";
 import { rankCandidates } from "./score-candidates";
 import { selectLargestSrcset, type SrcsetCandidate } from "./srcset";
 import { normalizeUrl } from "./url";
@@ -222,7 +223,13 @@ function candidateForImage(
       ...(caption ? { caption } : {}),
     });
   }
-  return rankCandidates(candidates, { showSameSizeImages: true })[0] ?? null;
+  const rewritten = candidates.flatMap((candidate) =>
+    applyRewriteRules(candidate, {
+      pageUrl: image.ownerDocument.location.href,
+      target: "image",
+    }),
+  );
+  return rankCandidates([...rewritten, ...candidates], { showSameSizeImages: true })[0] ?? null;
 }
 
 function largestPictureSource(picture: HTMLPictureElement): SrcsetCandidate | null {

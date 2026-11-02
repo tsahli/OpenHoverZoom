@@ -32,7 +32,6 @@ export type FetchErrorCode =
   | "network-error"
   | "response-too-large"
   | "timeout"
-  | "too-many-redirects"
   | "unsupported-content-type";
 
 export interface FetchDocumentFailure {
@@ -90,7 +89,6 @@ const FETCH_ERROR_CODES = new Set<FetchErrorCode>([
   "network-error",
   "response-too-large",
   "timeout",
-  "too-many-redirects",
   "unsupported-content-type",
 ]);
 

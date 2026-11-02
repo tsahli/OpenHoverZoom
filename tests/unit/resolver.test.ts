@@ -313,6 +313,25 @@ describe("target resolver", () => {
     });
   });
 
+  it("does not let a linked post's metadata replace a rewritten gallery photo", async () => {
+    const secondPhoto: MediaCandidate = {
+      url: "https://pbs.twimg.com/media/HUIiFb6W4AAwNM7?format=jpg&name=orig",
+      kind: "image",
+      source: "rewrite-rule",
+      confidence: 100,
+      quality: "original",
+      linkedPageUrl: "https://x.com/NASA/status/2108285056170996122/photo/2",
+    };
+
+    await expect(
+      resolveGalleryCandidate(secondPhoto, new AbortController().signal),
+    ).resolves.toBeNull();
+    await expect(
+      resolveDownloadCandidate(secondPhoto, new AbortController().signal),
+    ).resolves.toBeNull();
+    expect(mocks.resolveLinkedDocument).not.toHaveBeenCalled();
+  });
+
   it("does not change an image gallery thumbnail into linked video", async () => {
     const thumbnail: MediaCandidate = {
       url: "https://cdn.example/poster.jpg",

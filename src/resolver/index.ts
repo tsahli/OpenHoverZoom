@@ -69,7 +69,7 @@ export async function resolveGalleryCandidate(
   candidate: MediaCandidate,
   signal: AbortSignal,
 ): Promise<MediaCandidate | null> {
-  if (!candidate.linkedPageUrl) return null;
+  if (!hasLookupWorthLinkedPage(candidate)) return null;
   signal.throwIfAborted();
   const linked = await resolveLinkedDocument(candidate.linkedPageUrl, signal);
   signal.throwIfAborted();
@@ -96,7 +96,7 @@ export async function resolveDownloadCandidate(
   candidate: MediaCandidate,
   signal: AbortSignal,
 ): Promise<MediaCandidate | null> {
-  if (!candidate.linkedPageUrl) return null;
+  if (!hasLookupWorthLinkedPage(candidate)) return null;
   signal.throwIfAborted();
   const linked = await resolveLinkedDocument(candidate.linkedPageUrl, signal);
   signal.throwIfAborted();
@@ -106,6 +106,14 @@ export async function resolveDownloadCandidate(
     ),
     { showSameSizeImages: true },
   )[0] ?? null;
+}
+
+// A rewrite already names this exact item's original. Its linked page can describe
+// a whole post instead: X's /photo/2 redirects to a page whose metadata is photo 1.
+function hasLookupWorthLinkedPage(
+  candidate: MediaCandidate,
+): candidate is MediaCandidate & { linkedPageUrl: string } {
+  return Boolean(candidate.linkedPageUrl) && candidate.source !== "rewrite-rule";
 }
 
 function selectBestCandidate(

@@ -21,6 +21,32 @@ describe("DOM resolver", () => {
     });
   });
 
+  it("previews the original of an X grid thumbnail that is not larger than its rendering", () => {
+    const thumbnail = "https://pbs.twimg.com/media/HV56yHnXcAAwYJ2?format=jpg&name=360x360";
+    const anchor = document.createElement("a");
+    anchor.href = "/NASA/status/2116263878807998722/photo/1";
+    const photo = document.createElement("div");
+    photo.setAttribute("data-testid", "tweetPhoto");
+    const image = document.createElement("img");
+    image.src = thumbnail;
+    Object.defineProperty(image, "naturalWidth", { value: 215 });
+    Object.defineProperty(image, "naturalHeight", { value: 360 });
+    image.getBoundingClientRect = () => new DOMRect(0, 0, 209, 350);
+    photo.append(image);
+    anchor.append(photo);
+    document.body.append(anchor);
+
+    const resolution = resolveDomTarget(image, { showSameSizeImages: false });
+    expect(resolution.candidates).toHaveLength(1);
+    expect(resolution.candidates[0]).toMatchObject({
+      url: "https://pbs.twimg.com/media/HV56yHnXcAAwYJ2?format=jpg&name=orig",
+      source: "rewrite-rule",
+      quality: "original",
+    });
+    expect(resolution.candidates[0]?.confidence).toBeGreaterThanOrEqual(90);
+    expect(resolution.fallbackCandidates.map((candidate) => candidate.url)).toContain(thumbnail);
+  });
+
   it("collects the largest responsive and lazy-load candidates", () => {
     const image = document.createElement("img");
     image.srcset = "/small.jpg 300w, /large.jpg 1600w";
@@ -292,6 +318,36 @@ describe("DOM resolver", () => {
     const resolution = resolveDomTarget(image, { showSameSizeImages: true });
 
     expect(resolution.anchorUrl).toBeNull();
+  });
+
+  it("gives each photo of an X post its own original in the gallery", () => {
+    const grid = document.createElement("div");
+    const images = ["HUIiFOpW8AABTfc", "HUIiFb6W4AAwNM7"].map((id, index) => {
+      const anchor = document.createElement("a");
+      anchor.className = "photo-link";
+      anchor.href = `/NASA/status/2108285056170996122/photo/${index + 1}`;
+      const image = document.createElement("img");
+      image.src = `https://pbs.twimg.com/media/${id}?format=jpg&name=360x360`;
+      anchor.append(image);
+      grid.append(anchor);
+      return image;
+    });
+    document.body.append(grid);
+
+    const resolution = resolveDomTarget(images[1]!, { showSameSizeImages: false });
+    expect(resolution.gallery?.index).toBe(1);
+    expect(resolution.gallery?.items).toMatchObject([
+      {
+        url: "https://pbs.twimg.com/media/HUIiFOpW8AABTfc?format=jpg&name=orig",
+        source: "rewrite-rule",
+        linkedPageUrl: "http://localhost:3000/NASA/status/2108285056170996122/photo/1",
+      },
+      {
+        url: "https://pbs.twimg.com/media/HUIiFb6W4AAwNM7?format=jpg&name=orig",
+        source: "rewrite-rule",
+        linkedPageUrl: "http://localhost:3000/NASA/status/2108285056170996122/photo/2",
+      },
+    ]);
   });
 
   it("discovers an ordered, bounded gallery around the hovered image", () => {

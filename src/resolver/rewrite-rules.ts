@@ -16,9 +16,31 @@ export interface RewriteContext {
   target: "image" | "link";
 }
 
-// Rules are deliberately empty until a transformation is justified by a real,
-// independently documented compatibility case and fixture test.
-export const REWRITE_RULES: readonly RewriteRule[] = [];
+// Every rule must be justified by a real, independently documented compatibility
+// case and fixture test.
+export const REWRITE_RULES: readonly RewriteRule[] = [
+  // X renders post photos as small renditions (name=small, 360x360, ...) and its
+  // /photo/N links redirect to a page whose metadata only names the first photo,
+  // so the rendition has to be selected from the image URL itself. The priority
+  // lifts the result past the resolver's linked-document lookup.
+  {
+    id: "x-media-original",
+    appliesTo: "image",
+    mediaHosts: ["pbs.twimg.com"],
+    match: /^(https:\/\/pbs\.twimg\.com\/media\/[^/?#]+\?format=(?:jpg|jpeg|png)&name=)[^&#]+/u,
+    replace: "$1orig",
+    priority: 40,
+  },
+  // X answers format=webp&name=orig with a 404, so large is the best WebP rendition.
+  {
+    id: "x-media-webp-large",
+    appliesTo: "image",
+    mediaHosts: ["pbs.twimg.com"],
+    match: /^(https:\/\/pbs\.twimg\.com\/media\/[^/?#]+\?format=webp&name=)[^&#]+/u,
+    replace: "$1large",
+    priority: 40,
+  },
+];
 
 export function applyRewriteRules(
   candidate: MediaCandidate,

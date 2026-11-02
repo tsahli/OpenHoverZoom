@@ -3,7 +3,6 @@ import type { FetchErrorCode } from "../shared/messages";
 import { validateFetchUrl } from "./validate-url";
 
 const MAX_RESPONSE_BYTES = 1_500_000;
-const MAX_REDIRECTS = 3;
 const TIMEOUT_MILLISECONDS = 7_000;
 
 export interface FetchedDocument {
@@ -32,49 +31,42 @@ export async function fetchDocument(
   const signal = AbortSignal.any([externalSignal, timeout.signal]);
 
   try {
-    let currentUrl = initialUrl;
-    for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
-      let response: Response;
-      try {
-        response = await fetch(currentUrl, {
-          cache: "no-store",
-          credentials: "omit",
-          redirect: "manual",
-          referrerPolicy: "no-referrer",
-          signal,
-        });
-      } catch (error) {
-        if (signal.aborted) {
-          const code = timeout.signal.aborted ? "timeout" : "aborted";
-          throw new FetchDocumentError(code);
-        }
-        throw new FetchDocumentError("network-error");
+    // Browsers hide manual redirects behind an opaque response with no status or
+    // location, so redirects can only be followed by fetch and checked afterwards.
+    let response: Response;
+    try {
+      response = await fetch(initialUrl, {
+        cache: "no-store",
+        credentials: "omit",
+        redirect: "follow",
+        referrerPolicy: "no-referrer",
+        signal,
+      });
+    } catch (error) {
+      if (signal.aborted) {
+        const code = timeout.signal.aborted ? "timeout" : "aborted";
+        throw new FetchDocumentError(code);
       }
-
-      if (isRedirect(response.status)) {
-        if (redirects === MAX_REDIRECTS) {
-          throw new FetchDocumentError("too-many-redirects");
-        }
-        const location = response.headers.get("location");
-        const redirected = location ? validateFetchUrl(location, currentUrl.href) : null;
-        if (!redirected) throw new FetchDocumentError("invalid-url");
-        currentUrl = redirected;
-        continue;
-      }
-
-      const contentType = response.headers.get("content-type") ?? "";
-      const result = {
-        finalUrl: response.url || currentUrl.href,
-        contentType,
-        status: response.status,
-      };
-      if (mediaKindFromContentType(contentType)) return result;
-      if (!isHtmlContentType(contentType)) {
-        throw new FetchDocumentError("unsupported-content-type");
-      }
-      return { ...result, body: await readBoundedText(response, signal) };
+      throw new FetchDocumentError("network-error");
     }
-    throw new FetchDocumentError("too-many-redirects");
+
+    const finalUrl = validateFetchUrl(response.url || initialUrl.href);
+    if (!finalUrl) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new FetchDocumentError("invalid-url");
+    }
+
+    const contentType = response.headers.get("content-type") ?? "";
+    const result = {
+      finalUrl: finalUrl.href,
+      contentType,
+      status: response.status,
+    };
+    if (mediaKindFromContentType(contentType)) return result;
+    if (!isHtmlContentType(contentType)) {
+      throw new FetchDocumentError("unsupported-content-type");
+    }
+    return { ...result, body: await readBoundedText(response, signal) };
   } finally {
     clearTimeout(timer);
   }
@@ -107,8 +99,4 @@ async function readBoundedText(response: Response, signal: AbortSignal): Promise
   } finally {
     await reader.cancel().catch(() => undefined);
   }
-}
-
-function isRedirect(status: number): boolean {
-  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
 }

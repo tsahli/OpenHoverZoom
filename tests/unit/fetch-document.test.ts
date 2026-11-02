@@ -16,7 +16,7 @@ describe("bounded document fetch", () => {
     expect(result).toMatchObject({ status: 200, body: "<html><title>Fixture</title></html>" });
     expect(fetchMock).toHaveBeenCalledWith(
       new URL("https://example.com/article"),
-      expect.objectContaining({ credentials: "omit", redirect: "manual", referrerPolicy: "no-referrer" }),
+      expect.objectContaining({ credentials: "omit", redirect: "follow", referrerPolicy: "no-referrer" }),
     );
   });
 
@@ -35,6 +35,43 @@ describe("bounded document fetch", () => {
     );
     expect(result).toMatchObject({ contentType: "image/jpeg" });
     expect(result).not.toHaveProperty("body");
+  });
+
+  describe("redirects", () => {
+    const redirectedResponse = (url: string, contentType = "text/html"): Response => {
+      const response = new Response("<html></html>", {
+        headers: { "content-type": contentType },
+      });
+      Object.defineProperty(response, "url", { value: url });
+      return response;
+    };
+
+    it("reports the page a redirect ended on so relative metadata resolves against it", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(redirectedResponse("https://example.com/post/1")),
+      );
+      await expect(
+        fetchDocument(new URL("https://example.com/post/1/photo/1"), new AbortController().signal),
+      ).resolves.toMatchObject({ finalUrl: "https://example.com/post/1", status: 200 });
+    });
+
+    it.each([
+      ["a non-web scheme", "ftp://example.com/post"],
+      ["embedded credentials", "https://user:secret@example.com/post"],
+    ])("rejects a redirect ending at %s", async (_label, url) => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(redirectedResponse(url)));
+      await expect(
+        fetchDocument(new URL("https://example.com/link"), new AbortController().signal),
+      ).rejects.toEqual(expect.objectContaining<Partial<FetchDocumentError>>({ code: "invalid-url" }));
+    });
+
+    it("reports a redirect loop as a network error", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+      await expect(
+        fetchDocument(new URL("https://example.com/loop"), new AbortController().signal),
+      ).rejects.toEqual(expect.objectContaining<Partial<FetchDocumentError>>({ code: "network-error" }));
+    });
   });
 
   it("rejects a declared oversized response", async () => {
